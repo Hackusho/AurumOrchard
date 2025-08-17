@@ -89,3 +89,60 @@
 # 📜 Philosophy
 
 ### Aurum Orchard blends AI, blockchain, and finance with the discipline of first principles engineering. By structuring profits like the cycles of nature, it creates a self-sustaining ecosystem where every trade nourishes future growth.
+
+# 🗂️ Repository Overview
+
+- `bot/` – Python trading bot that orchestrates seed/root wallets, performs flash‑loan checks, and routes profits through Goldstem.
+- `contracts/` – Hardhat project containing the `Goldstem.sol` splitter and `FlashloanExecutor.sol` for Uniswap V3 round‑trip arbitrage.
+- `frontend/` – Vite + React interface for interacting with Goldstem and viewing split events.
+- `wallet_generator.js` – Node script to create and print a new wallet address, private key, and mnemonic.
+- `script.js` – Simple example querying ETH balances on Arbitrum, Base, and Optimism via Etherscan.
+- `jules-scratch/` – Experimental scripts such as Playwright‑based frontend verification.
+
+# 🚀 Getting Started
+
+## Install dependencies
+
+### Node
+
+```bash
+npm install
+cd contracts && npm install
+cd ../frontend && npm install
+```
+
+### Python
+
+```bash
+pip install -r requirements.txt
+pip install -r bot/requirements.txt
+```
+
+## Running the trading bot
+
+Set environment variables such as `ARBITRUM_MAINNET_RPC_URL`, `SEED_KEY`, `ROOT_KEY`, `GOLDSTEM_ADDRESS`, `FLASH_EXECUTOR_ADDRESS`, `FLASH_ASSET`, and `FLASH_AMOUNT_WEI`, then execute:
+
+```bash
+python bot/main.py
+```
+
+## Hardhat tasks & tests
+
+From the `contracts` directory:
+
+```bash
+npx hardhat test
+npx hardhat flash:dryrun
+```
+
+## Frontend
+
+```bash
+cd frontend
+npm run dev
+```
+
+## Utility scripts
+
+- Generate a wallet: `node wallet_generator.js`
+- Query cross‑chain balances: `node script.js`
