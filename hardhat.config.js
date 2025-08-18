@@ -47,6 +47,32 @@ task("flash:dryrun", "Executes a flashloan dry run")
         console.log("-------------------------");
     });
 
+// deploy:executor  
+task("deploy:executor", "Deploys FlashloanExecutor")
+  .addOptionalParam("provider", "Aave v3 PoolAddressesProvider")
+  .addOptionalParam("goldstem", "Goldstem contract address")
+  .addOptionalParam("root", "Root treasury EOA")
+  .setAction(async (args, hre) => {
+    const { ethers } = hre;
+    const provider = args.provider || process.env.AVE_POOL_ADDR_PROVIDER;
+    const goldstem = args.goldstem || process.env.GOLDSTEM_ADDRESS;
+    const root     = args.root     || process.env.ROOT_TREASURY;
+
+    if (!provider || !goldstem || !root) {
+      throw new Error("Missing provider/goldstem/root (pass --provider/--goldstem/--root or set env vars)");
+    }
+
+    const [deployer] = await ethers.getSigners();
+    console.log("Deployer:", deployer.address);
+    console.log("Args:", { provider, goldstem, root });
+
+    const Factory = await ethers.getContractFactory("FlashloanExecutor");
+    const executor = await Factory.deploy(provider, goldstem, root);
+    await executor.deployed();
+
+    console.log("FlashloanExecutor deployed to:", executor.address);
+  });
+
 module.exports = {
   solidity: {
     version: "0.8.24",
