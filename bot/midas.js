@@ -5,6 +5,8 @@ require('dotenv').config({
   quiet: true
 });
 const { ethers } = require('ethers');
+const premiumBps = BigInt(process.env.FLASH_PREMIUM_BPS || "9"); // 9 = 0.09% (adjust if your Aave pool differs)
+
 
 // ---- utils --------------------------------------------------------------
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -34,7 +36,7 @@ async function getFees(provider) {
   try {
     const d = await provider.getFeeData();
     if (d && (d.maxFeePerGas || d.gasPrice)) return d;
-  } catch {}
+  } catch { }
   const gpHex = await provider.send('eth_gasPrice', []);
   const gp = BigInt(gpHex);
   return { gasPrice: gp, maxFeePerGas: gp, maxPriorityFeePerGas: 0n };
@@ -42,24 +44,24 @@ async function getFees(provider) {
 
 // ---- chain objects ------------------------------------------------------
 const provider = new ethers.JsonRpcProvider(process.env.ARBITRUM_MAINNET_RPC_URL);
-const signer   = new ethers.Wallet(process.env.SEED_KEY, provider);
+const signer = new ethers.Wallet(process.env.SEED_KEY, provider);
 
 // ---- config (declare BEFORE use) ----------------------------------------
-const amount  = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
-const pollMs  = Number(process.env.POLL_MS || 4000);
-const estGas  = BigInt(process.env.EST_GAS || 250000);
-const safety  = BigInt(process.env.SAFETY_WEI || "1000000000000");
-const FEES    = [100, 500, 3000, 10000];
+const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
+const pollMs = Number(process.env.POLL_MS || 4000);
+const estGas = BigInt(process.env.EST_GAS || 250000);
+const safety = BigInt(process.env.SAFETY_WEI || "1000000000000");
+const FEES = [100, 500, 3000, 10000];
 
 const TOK = {
-  WETH:  safeAddr("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"),
+  WETH: safeAddr("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"),
   USDCe: safeAddr("0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8"),
-  USDC:  safeAddr("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831"),
-  USDT:  safeAddr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
+  USDC: safeAddr("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831"),
+  USDT: safeAddr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
 };
 
 const QUOTER = safeAddr("0x61fFE014bA17989E743c5F6cB21bF9697530B21e"); // Uniswap V3 QuoterV2
-const SUSHI  = safeAddr("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"); // Sushi V2 router
+const SUSHI = safeAddr("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"); // Sushi V2 router
 
 // ---- ABIs / contracts ---------------------------------------------------
 const artifact = require("../contracts/artifacts/contracts/FlashloanExecutor.sol/FlashloanExecutor.json");
@@ -72,7 +74,7 @@ const ISushi = new ethers.Interface([
 ]);
 
 const quoter = new ethers.Contract(QUOTER, IQuoter, provider); // view-only -> provider is fine
-const sushi  = new ethers.Contract(SUSHI,  ISushi,  provider); // view-only
+const sushi = new ethers.Contract(SUSHI, ISushi, provider); // view-only
 
 async function bestTwoLegV3(amountInWei) {
   const bases = [TOK.USDC, TOK.USDCe, TOK.USDT];
@@ -88,7 +90,7 @@ async function bestTwoLegV3(amountInWei) {
           const [qa] = await quoter.quoteExactInput.staticCall(pathAB, amountInWei);
           const [qb] = await quoter.quoteExactInput.staticCall(pathBA, qa);
           if (!best || qb > best.qb) best = { pathAB, pathBA, qa, qb, hops: "1-1" };
-        } catch {}
+        } catch { }
       }
 
       // 2-hop forward/back (e.g., WETH->USDCe->USDC then reverse)
@@ -101,7 +103,7 @@ async function bestTwoLegV3(amountInWei) {
               const [qa] = await quoter.quoteExactInput.staticCall(pathAB2, amountInWei);
               const [qb] = await quoter.quoteExactInput.staticCall(pathBA2, qa);
               if (!best || qb > best.qb) best = { pathAB: pathAB2, pathBA: pathBA2, qa, qb, hops: "2-2" };
-            } catch {}
+            } catch { }
           }
         }
       }
@@ -113,7 +115,7 @@ async function bestTwoLegV3(amountInWei) {
 async function main() {
   const exeAdr = safeAddr(process.env.FLASH_EXECUTOR_ADDRESS);
 
-  const net  = await provider.getNetwork();
+  const net = await provider.getNetwork();
   const code = await provider.getCode(exeAdr);
   if (code === "0x") throw new Error(`No contract at ${exeAdr} on chainId=${net.chainId}`);
 
@@ -126,34 +128,55 @@ async function main() {
 
   while (true) {
     try {
-      const f = await getFees(provider);
-      const gasPrice = (f.gasPrice ?? f.maxFeePerGas ?? 0n);
-      const gasWei   = gasPrice * estGas;
-      const minProfitWei = gasWei + safety;
-
-      // find best 2-leg v3 -> v3 roundtrip
+      const f = await provider.getFeeData();
+      const gas = (f.gasPrice ?? f.maxFeePerGas ?? 0n);
+      const minProfitWei = gas * estGas + safety;
+      const premiumWei = (amount * premiumBps) / 10_000n;
+  
+      // 1) find best two-leg Uniswap v3 roundtrip
       const best = await bestTwoLegV3(amount);
       if (!best) { console.log("skip: no route"); await sleep(pollMs); continue; }
-
-      // encode params to match: (bytes, bytes, uint256, uint256, uint256)
-      const slippageBps = 30n; // 0.30% per leg
-      const minOutA = best.qa - (best.qa * slippageBps) / 10000n;
-      const minOutB = best.qb - (best.qb * slippageBps) / 10000n;
-
-      const abi = ethers.AbiCoder.defaultAbiCoder();
-      const params = abi.encode(
-        ["bytes","bytes","uint256","uint256","uint256"],
+  
+      // 2) check economics
+      const qb = best.qb;                // WETH out after roundtrip
+      const need = amount + minProfitWei + premiumWei;
+      const grossBps = Number(((qb - amount) * 10_000n) / amount);
+  
+      if (qb < need) {
+        console.log("skip", { grossBps, need: need.toString(), hops: best.hops });
+        await sleep(pollMs);
+        continue;
+      }
+  
+      // 3) slippage guards per leg
+      const slippageBps = 30n; // 0.30% (tune)
+      const minOutA = best.qa - (best.qa * slippageBps) / 10_000n;
+      const minOutB = best.qb - (best.qb * slippageBps) / 10_000n;
+  
+      // 4) encode params: (bytes, bytes, uint256, uint256, uint256)
+      const params = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["bytes", "bytes", "uint256", "uint256", "uint256"],
         [best.pathAB, best.pathBA, minOutA, minOutB, minProfitWei]
       );
-
-      // ensure profitable including Aave premium (staticCall)
-      await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
-      console.log("fire", { hops: best.hops, qb: best.qb.toString(), minProfitWei: minProfitWei.toString(), gasWei: gasWei.toString() });
-
+  
+      // 5) simulate on-chain check (will revert with "not profitable" if it wouldn’t pass)
+      try {
+        await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
+      } catch (e) {
+        const msg = (e.reason || e.shortMessage || e.message || "").toLowerCase();
+        if (msg.includes("not profitable")) {
+          console.log("sim: not profitable — skipping");
+          await sleep(pollMs);
+          continue;
+        }
+        throw e;
+      }
+  
+      // 6) send tx
       const tx = await exe.runSimpleFlash(TOK.WETH, amount, params, { gasLimit: 2_000_000 });
       const rcpt = await tx.wait();
       console.log("done", { hash: rcpt.transactionHash, gasUsed: rcpt.gasUsed.toString() });
-
+  
     } catch (e) {
       console.error("err", e.shortMessage || e.message);
       if (e.stack) console.error(e.stack);
