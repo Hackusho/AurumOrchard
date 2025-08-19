@@ -221,40 +221,20 @@ contract FlashloanExecutor is
     require(msg.sender == pool, "only pool");
 
     // Decode execution plan
-    (
-        address[] memory pathA,
-        address[] memory pathB,
-        uint256 minOutA,
-        uint256 minOutB,
-        uint256 minProfitWei
-    ) = _decodeParams(params);
-
-    IERC20 token = IERC20(asset);
-    uint256 beforeBal = token.balanceOf(address(this));
-
-    // 1) Do the round-trip (e.g., WETH->USDC on UniV3, then USDC->WETH on Sushi)
-    uint256 afterBal = executeArbitrageStrategy(
-        asset,
-        amount,
-        pathA,
-        pathB,
-        minOutA,
-        minOutB
-    );
-
-    // 2) Require the round-trip covered premium + desired profit
-    uint256 earned = afterBal > beforeBal ? afterBal - beforeBal : 0;
-    require(earned >= premium + minProfitWei, "not profitable");
+    (address[] memory pathA, address[] memory pathB, uint256 minOutA, uint256 minOutB, uint256 minProfitWei) = _decodeParams(params);
+    uint256 beforeBal = IERC20(asset).balanceOf(address(this));
+    uint256 afterBal = executeArbitrageStrategy(asset, amount, pathA, pathB, minOutA, minOutB);
+    require(afterBal - beforeBal >= premium + minProfitWei, "not profitable");
 
     // 3) Repay Aave
     uint256 repay = amount + premium;
-    token.approve(pool, 0);
-    token.approve(pool, repay);
+    IERC20(asset).approve(pool, 0);
+    IERC20(asset).approve(pool, repay);
 
     // 4) Send profit to treasury
     uint256 profitWei = afterBal - repay;
     if (profitWei > 0) {
-        token.transfer(rootTreasury, profitWei);
+        IERC20(asset).transfer(rootTreasury, profitWei);
     }
 
     emit FlashCompleted(asset, premium, profitWei);
@@ -262,20 +242,20 @@ contract FlashloanExecutor is
 }
 
 
-    function _decodeParams(bytes memory params)
-        internal
-        pure
-        returns (
-            address[] memory pathA,
-            address[] memory pathB,
-            uint256 minOutA,
-            uint256 minOutB,
-            uint256 minProfitWei
-        )
-    {
-    return abi.decode(params, (address[], address[], uint256, uint256, uint256));
+    function _decodeParams(
+    bytes memory params
+)
+    internal
+    pure
+    returns (
+        address[] memory pathA,
+        address[] memory pathB,
+        uint256 minOutA,
+        uint256 minOutB,
+        uint256 minProfitWei
+    ) {
+        return abi.decode(params, (address[], address[], uint256, uint256, uint256));
     }
-
 
     function executeArbitrageStrategy(
         address asset,
