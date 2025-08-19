@@ -21,9 +21,10 @@ async function main() {
         rootEoa
     );
 
-    await flashloanExecutor.deployed();
+    await flashloanExecutor.waitForDeployment();
 
-    console.log("FlashloanExecutor deployed to:", flashloanExecutor.address);
+    const deployedAddress = await flashloanExecutor.getAddress();
+    console.log("FlashloanExecutor deployed to:", deployedAddress);
 
     // --- Update .env file ---
     const envPath = path.join(__dirname, "../.env");

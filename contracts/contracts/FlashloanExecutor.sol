@@ -9,25 +9,36 @@ import { IPool } from "@aave/core-v3/contracts/interfaces/IPool.sol";
 import { IFlashLoanSimpleReceiver } from "@aave/core-v3/contracts/flashloan/interfaces/IFlashLoanSimpleReceiver.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-abstract contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimpleReceiver {
+contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimpleReceiver {
     address public immutable pool;
+    address public immutable provider;
     address public rootTreasury;
     address public goldstem;
 
     event FlashStarted(address asset, uint256 amount);
     event FlashCompleted(address asset, uint256 premium, uint256 profitWei);
 
-    constructor(address provider, address _goldstem, address _rootTreasury)
+    constructor(address _provider, address _goldstem, address _rootTreasury)
         Ownable(msg.sender) // if OZ v5; remove if using OZ v4
     {
-        require(provider != address(0) && _goldstem != address(0) && _rootTreasury != address(0), "zero addr");
-        pool = IPoolAddressesProvider(provider).getPool();
+        require(_provider != address(0) && _goldstem != address(0) && _rootTreasury != address(0), "zero addr");
+        provider = _provider;
+        pool = IPoolAddressesProvider(_provider).getPool();
         goldstem = _goldstem;
         rootTreasury = _rootTreasury;
     }
 
     function setGoldstem(address a) external onlyOwner { goldstem = a; }
     function setRootTreasury(address a) external onlyOwner { rootTreasury = a; }
+
+    // Required by IFlashLoanSimpleReceiver interface
+    function ADDRESSES_PROVIDER() external view returns (IPoolAddressesProvider) {
+        return IPoolAddressesProvider(provider);
+    }
+
+    function POOL() external view returns (IPool) {
+        return IPool(pool);
+    }
 
     function runSimpleFlash(address asset, uint256 amount, bytes calldata params)
         external
