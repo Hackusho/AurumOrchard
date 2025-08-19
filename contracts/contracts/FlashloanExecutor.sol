@@ -170,31 +170,31 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
     ) external override returns (bool) {
         require(msg.sender == pool, "only pool");
 
-        // Execute arbitrage strategy
+        // Execute arbitrage strategy and capture the profit
         uint256 profit = executeArbitrageStrategy(asset, amount);
-        
-        // Ensure we have enough to repay the loan + premium
-        uint256 repay = amount + premium;
-        uint256 currentBalance = IERC20(asset).balanceOf(address(this));
-        
-        // If arbitrage failed and we don't have enough balance, this is a problem
-        // In a real scenario, you'd want to handle this more gracefully
-        require(currentBalance >= repay, "Insufficient balance to repay flash loan");
-        
-        // Approve pool to pull repayment
-        IERC20(asset).approve(pool, 0);
-        IERC20(asset).approve(pool, repay);
 
-        // Calculate final profit after repayment
-        uint256 finalBalance = IERC20(asset).balanceOf(address(this));
-        uint256 finalProfit = finalBalance > repay ? finalBalance - repay : 0;
-        
-        // Send profit to root treasury (Goldstem)
-        if (finalProfit > 0) {
-            IERC20(asset).transfer(rootTreasury, finalProfit);
+        // Ensure the profit from arbitrage is enough to cover the flash loan premium
+        require(profit >= premium, "Insufficient profit to cover flash loan premium");
+
+        // We have enough profit, so we can proceed with the repayment logic
+        uint256 repayAmount = amount + premium;
+        uint256 currentBalance = IERC20(asset).balanceOf(address(this));
+
+        // The amount to transfer to the treasury is the entire balance minus the repayment amount
+        // This ensures the contract is swept clean of any remaining funds (including dust)
+        uint256 amountToTreasury = currentBalance - repayAmount;
+
+        // Transfer the net profit (and any dust) to the root treasury
+        if (amountToTreasury > 0) {
+            IERC20(asset).transfer(rootTreasury, amountToTreasury);
         }
-        
-        emit FlashCompleted(asset, premium, finalProfit);
+
+        // Approve the Aave pool to pull the repayment amount
+        IERC20(asset).approve(pool, 0);
+        IERC20(asset).approve(pool, repayAmount);
+
+        // Emit an event with the details of the completed flash loan
+        emit FlashCompleted(asset, premium, profit - premium);
         return true;
     }
 
