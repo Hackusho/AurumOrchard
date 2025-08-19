@@ -10,7 +10,7 @@ task("deploy:executor", "Deploys FlashloanExecutor")
     const { ethers } = hre;
     const provider = args.provider || process.env.AVE_POOL_ADDR_PROVIDER;
     const goldstem = args.goldstem || process.env.GOLDSTEM_ADDRESS;
-    const root     = args.root     || process.env.ROOT_TREASURY;
+    const root = args.root || process.env.ROOT_TREASURY;
 
     if (!provider || !goldstem || !root) {
       throw new Error("Missing provider/goldstem/root (pass --provider/--goldstem/--root or set env vars)");
@@ -29,78 +29,51 @@ task("deploy:executor", "Deploys FlashloanExecutor")
   });
 
 // flash:dryrun task
-task("flash:dryrun", "Simulates flash loan execution without actually calling the blockchain")
-  .addParam("executor", "FlashloanExecutor contract address")
-  .addParam("asset", "Token address to flash loan")
-  .addParam("amount", "Amount to flash loan (in wei)")
-  .addOptionalParam("provider", "Aave v3 PoolAddressesProvider")
+task("flash:dryrun", "Executes a flashloan dry run")
+  .addOptionalParam("executor", "FlashloanExecutor address")
+  .addOptionalParam("asset", "ERC20 asset address to flash")
+  .addOptionalParam("amount", "Amount in wei (or token units)")
+  .addOptionalParam("root", "Root treasury/owner EOA")
   .setAction(async (args, hre) => {
     const { ethers } = hre;
-    const executor = args.executor;
-    const asset = args.asset;
-    const amount = args.amount;
-    const provider = args.provider || process.env.AVE_POOL_ADDR_PROVIDER;
 
-    if (!provider) {
-      throw new Error("Missing provider (pass --provider or set AVE_POOL_ADDR_PROVIDER env var)");
+    const addr = (x) => ethers.getAddress(x.toLowerCase());
+    const executor = addr(args.executor || process.env.FLASH_EXECUTOR_ADDRESS);
+    const asset = addr(args.asset || process.env.FLASH_ASSET);
+    const amount = args.amount || process.env.FLASH_AMOUNT_WEI;
+    const rootKey = args.root || process.env.ROOT_KEY;
+
+    if (!executor || !asset || !amount || !rootKey) {
+      throw new Error("Missing executor/asset/amount/rootKey (pass args or set env)");
     }
 
-    console.log("=== Flash Loan Dry Run ===");
+    const rootSigner = new ethers.Wallet(rootKey, ethers.provider);
+    const flash = await ethers.getContractAt("FlashloanExecutor", executor, rootSigner);
+
+    console.log("--- Flashloan Dry Run ---");
     console.log("Executor:", executor);
     console.log("Asset:", asset);
-    console.log("Amount:", amount);
-    console.log("Provider:", provider);
+    console.log("Amount (wei):", amount);
 
-    // Get contract instances
-    const executorContract = await ethers.getContractAt("FlashloanExecutor", executor);
-    const assetContract = await ethers.getContractAt("IERC20", asset);
-    const poolProvider = await ethers.getContractAt("IPoolAddressesProvider", provider);
+    const token = await ethers.getContractAt("IERC20", asset);
+    const rootTreasury = await flash.rootTreasury();
+    const balBefore = await token.balanceOf(rootTreasury);
 
-    try {
-      // Get pool address
-      const poolAddress = await poolProvider.getPool();
-      console.log("Pool Address:", poolAddress);
+    const tx = await flash.runSimpleFlash(asset, amount, "0x");
+    const rcpt = await tx.wait();
+    console.log("Tx:", rcpt.transactionHash, "GasUsed:", rcpt.gasUsed.toString());
 
-      // Check if executor is paused
-      const isPaused = await executorContract.paused();
-      console.log("Executor Paused:", isPaused);
+    const balAfter = await token.balanceOf(rootTreasury);
+    console.log("Profit (wei):", balAfter - balBefore);
 
-      if (isPaused) {
-        console.log("❌ Executor is paused - cannot execute flash loan");
-        return;
-      }
-
-      // Check asset balance (this would be 0 in a real scenario before flash loan)
-      const balance = await assetContract.balanceOf(executor);
-      console.log("Current Asset Balance:", balance.toString());
-
-      // Simulate the flash loan logic
-      console.log("\n=== Simulating Flash Loan Execution ===");
-      
-      // Calculate premium (typically 0.05% for Aave v3)
-      const premium = (BigInt(amount) * BigInt(5)) / BigInt(10000); // 0.05%
-      const repayAmount = BigInt(amount) + premium;
-      
-      console.log("Flash Loan Amount:", amount);
-      console.log("Premium (0.05%):", premium.toString());
-      console.log("Repay Amount:", repayAmount.toString());
-
-      // Check if executor has enough balance to repay (in real scenario, this would come from arbitrage)
-      if (balance >= repayAmount) {
-        const profit = balance - repayAmount;
-        console.log("✅ Flash loan would succeed");
-        console.log("Profit:", profit.toString());
-      } else {
-        console.log("❌ Flash loan would fail - insufficient balance to repay");
-        console.log("Required:", repayAmount.toString());
-        console.log("Available:", balance.toString());
-      }
-
-      console.log("\n=== Dry Run Complete ===");
-      console.log("Note: This is a simulation. No actual transactions were sent.");
-
-    } catch (error) {
-      console.error("Error during dry run:", error.message);
+    for (const ev of rcpt.logs) {
+      try {
+        const parsed = flash.interface.parseLog(ev);
+        if (parsed?.name === "FlashCompleted") {
+          console.log("FlashCompleted -> premium:", parsed.args.premium.toString(),
+            "profitWei:", parsed.args.profitWei.toString());
+        }
+      } catch { }
     }
   });
 

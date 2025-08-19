@@ -1,4 +1,32 @@
-npx hardhat run check-balance.js --network arbitrumMainnet
-const balance = await ethers.provider.getBalance("0xFf6AE51D0a2df0F548bac678a5d0756d7649BA92")
-ethers.utils.formatEther(balance)
-const balance = await ethers.provider.getBalance("0xFf6AE51D0a2df0F548bac678a5d0756d7649BA92")
+.exit
+(await IWETH.balanceOf(exeAddr)).toString();         // confirm > 0
+await IWETH.transfer(exeAddr, ethers.parseEther("0.00005"));
+await IWETH.deposit({ value: ethers.parseEther("0.001") });
+);
+  root
+   "function balanceOf(address) view returns (uint256)"],
+   "function transfer(address,uint256) returns (bool)",
+  ["function deposit() payable",
+  WETH,
+const IWETH = new ethers.Contract(
+const WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
+// 3) Prefund executor with a little WETH to cover Aave premium
+if (await exeAsRoot.paused()) { await exeAsRoot.unpause(); }
+const exeAsRoot = exeAsOwner.connect(root);
+// 2) Unpause if needed
+(await exeAsOwner.owner()).toLowerCase();            // now 0x3d89...
+await exeAsOwner.transferOwnership(await root.getAddress());
+(await root.getAddress()).toLowerCase();             // should be 0x3d89...
+(await exeAsOwner.owner()).toLowerCase();            // should be 0xff6a...
+const exeAsOwner = await ethers.getContractAt("FlashloanExecutor", exeAddr, owner);
+const root    = new ethers.Wallet(process.env.ROOT_KEY,  ethers.provider);
+const owner   = new ethers.Wallet(process.env.SEED_KEY, ethers.provider);
+const exeAddr = "0xbC2A7891F0c9c7C6992f47CB55d06C27996e38B0";
+// 1) Transfer ownership from deployer (SEED_KEY / 0xFf6A...) to ROOT_KEY (0x3d89...)
+(await exe.paused())
+await exe.transferOwnership(await signer.getAddress
+(await signer.getAddress()).toLowerCase();
+(await exe.owner()).toLowerCase();
+const exe     = await ethers.getContractAt("FlashloanExecutor", exeAddr, signer);
+const signer  = new ethers.Wallet(process.env.ROOT_KEY, ethers.provider);
+const exeAddr = "0xbC2A7891F0c9c7C6992f47CB55d06C27996e38B0";
