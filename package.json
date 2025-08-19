@@ -12,6 +12,8 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@noble/curves": "1.4.0",
+    "@noble/hashes": "1.4.0",
     "ethers": "^6.8.1"
   },
   "devDependencies": {
