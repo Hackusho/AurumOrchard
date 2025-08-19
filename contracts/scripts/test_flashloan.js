@@ -6,7 +6,7 @@ async function main() {
   // Configuration - update these values
   const EXECUTOR_ADDRESS = process.env.FLASH_EXECUTOR_ADDRESS;
   const ASSET_ADDRESS = process.env.TEST_ASSET_ADDRESS || "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"; // WETH on Arbitrum
-  const FLASH_AMOUNT = ethers.parseEther("1"); // 1 WETH
+  const FLASH_AMOUNT = ethers.parseEther("1"); // Use 1 WETH for testing
   const PROVIDER_ADDRESS = process.env.AVE_POOL_ADDR_PROVIDER;
 
   if (!EXECUTOR_ADDRESS) {
@@ -58,15 +58,34 @@ async function main() {
     const balanceBefore = await asset.balanceOf(EXECUTOR_ADDRESS);
     console.log("Balance Before Flash Loan:", ethers.formatEther(balanceBefore), "tokens");
 
-    // Check if we have enough balance to cover the premium
-    const premium = (FLASH_AMOUNT * BigInt(5)) / BigInt(10000); // 0.05%
-    console.log("Flash Loan Premium:", ethers.formatEther(premium), "tokens");
+    // For dynamic amounts, we'll let the contract handle the calculation
+    if (FLASH_AMOUNT > 0) {
+      // Check if we have enough balance to cover the premium for fixed amounts
+      const premium = (FLASH_AMOUNT * BigInt(5)) / BigInt(10000); // 0.05%
+      console.log("Flash Loan Premium:", ethers.formatEther(premium), "tokens");
 
-    if (balanceBefore < premium) {
-      console.log("❌ Insufficient balance to cover premium");
-      console.log("Required:", ethers.formatEther(premium), "tokens");
-      console.log("Available:", ethers.formatEther(balanceBefore), "tokens");
-      return;
+      if (balanceBefore < premium) {
+        console.log("❌ Insufficient balance to cover premium");
+        console.log("Required:", ethers.formatEther(premium), "tokens");
+        console.log("Available:", ethers.formatEther(balanceBefore), "tokens");
+        return;
+      }
+    } else {
+            console.log("Using dynamic optimal amount calculation");
+      
+      // Query the optimal amount from the contract
+      try {
+        const [optimalAmount, expectedProfit] = await executor.calculateOptimalFlashAmount(ASSET_ADDRESS);
+        if (optimalAmount > 0) {
+          console.log("Optimal Flash Loan Amount:", ethers.formatEther(optimalAmount), "tokens");
+          console.log("Expected Profit:", ethers.formatEther(expectedProfit), "tokens");
+        } else {
+          console.log("❌ No profitable arbitrage opportunity found");
+          return;
+        }
+      } catch (error) {
+        console.log("Could not calculate optimal amount:", error.message);
+      }
     }
 
     console.log("\n=== Executing Flash Loan ===");

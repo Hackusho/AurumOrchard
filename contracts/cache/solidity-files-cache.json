@@ -74,8 +74,8 @@
       ]
     },
     "C:\\Users\\12524\\Primal Tree AI\\AurumOrchard\\contracts\\contracts\\FlashloanExecutor.sol": {
-      "lastModificationDate": 1755565644932,
-      "contentHash": "19de6600553668e50289a7deb92b934d",
+      "lastModificationDate": 1755568871542,
+      "contentHash": "4f269faf4173eaf7b90089582c50a98d",
       "sourceName": "contracts/FlashloanExecutor.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -114,7 +114,9 @@
         "^0.8.24"
       ],
       "artifacts": [
-        "FlashloanExecutor"
+        "FlashloanExecutor",
+        "ISushiSwapRouter",
+        "IUniswapV3Router"
       ]
     },
     "C:\\Users\\12524\\Primal Tree AI\\AurumOrchard\\contracts\\node_modules\\@openzeppelin\\contracts\\utils\\ReentrancyGuard.sol": {
