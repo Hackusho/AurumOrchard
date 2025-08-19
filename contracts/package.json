@@ -3,7 +3,10 @@
   "scripts": {
     "flash:dryrun": "npx hardhat flash:dryrun",
     "test:flash": "npx hardhat run scripts/test_flashloan.js --network arbitrumSepolia",
-    "test:flash:mainnet": "npx hardhat run scripts/test_flashloan.js --network arbitrumMainnet"
+    "test:flash:mainnet": "npx hardhat run scripts/test_flashloan.js --network arbitrumMainnet",
+    "flash:once": "npx hardhat run scripts/flash_once.js --network arbitrumSepolia",
+    "flash:once:mainnet": "npx hardhat run scripts/flash_once.js --network arbitrumMainnet",
+    "Midas": "node bot/Midas.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

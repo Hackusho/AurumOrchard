@@ -8,19 +8,9 @@
         {
           "components": [
             {
-              "internalType": "address",
-              "name": "tokenIn",
-              "type": "address"
-            },
-            {
-              "internalType": "address",
-              "name": "tokenOut",
-              "type": "address"
-            },
-            {
-              "internalType": "uint24",
-              "name": "fee",
-              "type": "uint24"
+              "internalType": "bytes",
+              "name": "path",
+              "type": "bytes"
             },
             {
               "internalType": "address",
@@ -41,19 +31,14 @@
               "internalType": "uint256",
               "name": "amountOutMinimum",
               "type": "uint256"
-            },
-            {
-              "internalType": "uint160",
-              "name": "sqrtPriceLimitX96",
-              "type": "uint160"
             }
           ],
-          "internalType": "struct IUniswapV3Router.ExactInputSingleParams",
+          "internalType": "struct IUniswapV3Router.ExactInputParams",
           "name": "params",
           "type": "tuple"
         }
       ],
-      "name": "exactInputSingle",
+      "name": "exactInput",
       "outputs": [
         {
           "internalType": "uint256",

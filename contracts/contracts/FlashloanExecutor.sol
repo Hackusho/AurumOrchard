@@ -11,30 +11,16 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // DEX Router Interfaces for Arbitrum
 interface IUniswapV3Router {
-    function exactInputSingle(
-        ExactInputSingleParams calldata params
-    ) external payable returns (uint256 amountOut);
-
-    struct ExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint24 fee;
+    struct ExactInputParams {
+        bytes path;
         address recipient;
         uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
-        uint160 sqrtPriceLimitX96;
     }
-}
-
-interface ISushiSwapRouter {
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256 amountOutMin,
-        address[] calldata path,
-        address to,
-        uint256 deadline
-    ) external returns (uint256[] memory amounts);
+    function exactInput(
+        ExactInputParams calldata params
+    ) external payable returns (uint256 amountOut);
 }
 
 contract FlashloanExecutor is
@@ -51,16 +37,13 @@ contract FlashloanExecutor is
     // DEX Router addresses on Arbitrum
     address public constant UNISWAP_V3_ROUTER =
         0xE592427A0AEce92De3Edee1F18E0157C05861564;
-    address public constant SUSHISWAP_ROUTER =
-        0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506;
-
+    
     // Common token pairs for arbitrage
     address public constant WETH = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
     address public constant USDC = 0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8;
     address public constant USDT = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
 
     // Arbitrage parameters
-    uint24 public constant UNISWAP_FEE = 3000; // 0.3%
     uint256 public constant MIN_PROFIT_THRESHOLD = 0.001 ether; // 0.001 WETH minimum profit
     uint256 public constant MAX_FLASH_AMOUNT = 100 ether; // 100 WETH max flash loan
 
@@ -212,104 +195,138 @@ contract FlashloanExecutor is
     }
 
     function executeOperation(
-    address asset,
-    uint256 amount,
-    uint256 premium,
-    address /* initiator */,
-    bytes calldata params
-) external override returns (bool) {
-    require(msg.sender == pool, "only pool");
+        address asset,
+        uint256 amount,
+        uint256 premium,
+        address /* initiator */,
+        bytes calldata params
+    ) external override returns (bool) {
+        require(msg.sender == pool, "only pool");
 
-    // Decode execution plan
-    (address[] memory pathA, address[] memory pathB, uint256 minOutA, uint256 minOutB, uint256 minProfitWei) = _decodeParams(params);
-    uint256 beforeBal = IERC20(asset).balanceOf(address(this));
-    uint256 afterBal = executeArbitrageStrategy(asset, amount, pathA, pathB, minOutA, minOutB);
-    require(afterBal - beforeBal >= premium + minProfitWei, "not profitable");
+        // bytes-based V3 paths + guards
+        (
+            bytes memory pathV3A,
+            bytes memory pathV3B,
+            uint256 minOutA,
+            uint256 minOutB,
+            uint256 minProfitWei
+        ) = _decodeParams(params);
 
-    // 3) Repay Aave
-    uint256 repay = amount + premium;
-    IERC20(asset).approve(pool, 0);
-    IERC20(asset).approve(pool, repay);
+        uint256 beforeBal = IERC20(asset).balanceOf(address(this));
 
-    // 4) Send profit to treasury
-    uint256 profitWei = afterBal - repay;
-    if (profitWei > 0) {
-        IERC20(asset).transfer(rootTreasury, profitWei);
+        uint256 afterBal = executeArbitrageStrategy(
+            asset,
+            amount,
+            pathV3A,
+            pathV3B,
+            minOutA,
+            minOutB
+        );
+
+        // avoid underflow
+        uint256 profit = afterBal > beforeBal ? (afterBal - beforeBal) : 0;
+        require(profit >= premium + minProfitWei, "not profitable");
+
+        // Repay Aave
+        uint256 repay = amount + premium;
+        IERC20(asset).approve(pool, 0);
+        IERC20(asset).approve(pool, repay);
+
+        // Send profit to treasury
+        uint256 profitWei = afterBal - repay;
+        if (profitWei > 0) {
+            IERC20(asset).transfer(rootTreasury, profitWei);
+        }
+
+        emit FlashCompleted(asset, premium, profitWei);
+        return true;
     }
 
-    emit FlashCompleted(asset, premium, profitWei);
-    return true;
-}
-
-
     function _decodeParams(
-    bytes memory params
-)
-    internal
-    pure
-    returns (
-        address[] memory pathA,
-        address[] memory pathB,
-        uint256 minOutA,
-        uint256 minOutB,
-        uint256 minProfitWei
-    ) {
-        return abi.decode(params, (address[], address[], uint256, uint256, uint256));
+        bytes memory params
+    )
+        internal
+        pure
+        returns (
+            bytes memory pathV3A, // asset -> ... -> mid
+            bytes memory pathV3B, // mid   -> ... -> asset
+            uint256 minOutA,
+            uint256 minOutB,
+            uint256 minProfitWei
+        )
+    {
+        return abi.decode(params, (bytes, bytes, uint256, uint256, uint256));
+    }
+
+    function _firstToken(
+        bytes memory path
+    ) internal pure returns (address token) {
+        require(path.length >= 20, "path short");
+        assembly {
+            token := shr(96, mload(add(path, 32)))
+        }
+    }
+    function _lastToken(
+        bytes memory path
+    ) internal pure returns (address token) {
+        require(path.length >= 20, "path short");
+        uint256 len = path.length;
+        uint256 index = len - 20;
+        assembly {
+            token := shr(96, mload(add(add(path, 32), index)))
+        }
     }
 
     function executeArbitrageStrategy(
         address asset,
         uint256 amount,
-        address[] memory pathA,
-        address[] memory pathB,
+        bytes memory pathV3A,
+        bytes memory pathV3B,
         uint256 minOutA,
         uint256 minOutB
     ) internal returns (uint256 amountOut) {
-        require(pathA.length == 2, "pathA len");
-        require(pathB.length >= 2, "pathB len");
-        require(
-            pathA[0] == asset && pathB[pathB.length - 1] == asset,
-            "asset mismatch"
-        );
-        require(pathA[1] == pathB[0], "path mismatch");
+        address a0 = _firstToken(pathV3A);
+        address aN = _lastToken(pathV3A);
+        address b0 = _firstToken(pathV3B);
+        address bN = _lastToken(pathV3B);
 
-        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
+        require(a0 == asset, "pathA start != asset");
+        require(bN == asset, "pathB end != asset");
+        require(aN == b0, "paths not chained");
 
-        IERC20(pathA[0]).approve(UNISWAP_V3_ROUTER, amount);
-        IUniswapV3Router.ExactInputSingleParams
-            memory uniParams = IUniswapV3Router.ExactInputSingleParams({
-                tokenIn: pathA[0],
-                tokenOut: pathA[1],
-                fee: UNISWAP_FEE,
+        uint256 balBefore = IERC20(asset).balanceOf(address(this));
+
+        // Leg A: asset -> mid (multi-hop, variable fees)
+        IERC20(a0).approve(UNISWAP_V3_ROUTER, 0);
+        IERC20(a0).approve(UNISWAP_V3_ROUTER, amount);
+
+        uint256 interAmount = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
+            IUniswapV3Router.ExactInputParams({
+                path: pathV3A,
                 recipient: address(this),
                 deadline: block.timestamp + 300,
                 amountIn: amount,
-                amountOutMinimum: minOutA,
-                sqrtPriceLimitX96: 0
-            });
-        uint256 interAmount = IUniswapV3Router(UNISWAP_V3_ROUTER)
-            .exactInputSingle(uniParams);
+                amountOutMinimum: minOutA
+            })
+        );
 
-        IERC20(pathB[0]).approve(SUSHISWAP_ROUTER, interAmount);
-        ISushiSwapRouter(SUSHISWAP_ROUTER).swapExactTokensForTokens(
-            interAmount,
-            minOutB,
-            pathB,
-            address(this),
-            block.timestamp + 300
+        // Leg B: mid -> asset (multi-hop, variable fees)
+        IERC20(b0).approve(UNISWAP_V3_ROUTER, 0);
+        IERC20(b0).approve(UNISWAP_V3_ROUTER, interAmount);
+
+        IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
+            IUniswapV3Router.ExactInputParams({
+                path: pathV3B,
+                recipient: address(this),
+                deadline: block.timestamp + 300,
+                amountIn: interAmount,
+                amountOutMinimum: minOutB
+            })
         );
 
         amountOut = IERC20(asset).balanceOf(address(this));
-        uint256 profit = amountOut > balanceBefore
-            ? amountOut - balanceBefore
-            : 0;
-        emit ArbitrageExecuted(
-            pathA[0],
-            pathB[pathB.length - 1],
-            amount,
-            amountOut,
-            profit
-        );
+        uint256 profit = amountOut > balBefore ? amountOut - balBefore : 0;
+        emit ArbitrageExecuted(a0, bN, amount, amountOut, profit);
     }
 
     // Emergency function to withdraw stuck tokens
