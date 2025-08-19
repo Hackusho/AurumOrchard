@@ -157,6 +157,16 @@ def flashloan_and_arb(w3, seed_account, root_account, flash_executor_contract, g
         print("Flashloan env not configured (executor/asset/amount). Skipping.")
         return
 
+    # Ensure root owns the executor
+    try:
+        owner = flash_executor_contract.functions.owner().call()
+        if owner != root_account.address:
+            print(f"Root is not owner of FlashExecutor. Owner is {owner}. Aborting flashloan.")
+            return
+    except Exception as e:
+        print(f"Could not fetch FlashExecutor owner: {e}")
+        return
+
     # Build Uniswap V3 roundtrip params for the borrowed asset
     try:
         params_bytes, min_out, quote = encode_flash_params_for_roundtrip(
@@ -180,10 +190,10 @@ def flashloan_and_arb(w3, seed_account, root_account, flash_executor_contract, g
     tx = flash_executor_contract.functions.runSimpleFlash(
         to_checksum(FLASH_ASSET), int(FLASH_AMOUNT_WEI), params_bytes
     ).build_transaction({
-        "from": seed_account.address,  # must be executor owner
+        "from": root_account.address,  # must be executor owner
     })
 
-    rcpt = send_tx(w3, tx, seed_account)
+    rcpt = send_tx(w3, tx, root_account)
 
     # Decode FlashCompleted from receipt
     profit = 0
@@ -234,6 +244,11 @@ def main():
         flash_abi = load_abi(FLASH_EXECUTOR_ABI_PATH)
         flash_executor = w3.eth.contract(address=to_checksum(FLASH_EXECUTOR_ADDRESS), abi=flash_abi)
         print(f"FlashExecutor: {flash_executor.address}")
+        try:
+            exec_owner = flash_executor.functions.owner().call()
+            print(f"FlashExecutor Owner: {exec_owner}")
+        except Exception as e:
+            print(f"Could not fetch FlashExecutor owner: {e}")
     else:
         print("FlashExecutor not configured (set FLASH_EXECUTOR_ADDRESS to enable).")
 
