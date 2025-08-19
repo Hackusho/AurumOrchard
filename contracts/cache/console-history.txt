@@ -1,32 +1,171 @@
+})();
+  console.log("Tx:", rcpt.transactionHash, "GasUsed:", rcpt.gasUsed.toString());
+  const rcpt = await tx.wait();
+  const tx = await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
+  // Send (gas settings optional on Arbitrum; fee data may be null)
+  }
+    return;
+    console.log("Static-call revert:", e.shortMessage || e.message);
+  } catch (e) {
+    console.log("Static OK → sending tx…");
+    await exe.runSimpleFlash.staticCall(WETH, amount, params);
+  try {
+  // Dry run first (no gas spent)
+  console.log("minProfitWei:", minProfit.toString());
+  );
+    [ROUTER, USDC, fee1, fee2, minProfit, deadline]
+    ["address","address","uint24","uint24","uint256","uint256"],
+  const params = abi.encode(
+  const abi = ethers.AbiCoder.defaultAbiCoder();
+  // Encode params: (router, mid, fee1, fee2, minProfitWei, deadline)
+  const deadline = BigInt(Math.floor(Date.now()/1000) + 120);
+  const minProfit  = gasWei + premiumPad + safety;
+  const safety     = 10_000_000_000_000n;    // 0.00001 WETH
+  const premiumPad = (amount * 7n) / 10000n; // ~7 bps cushion
+  const gasWei = price * estGas;
+  const estGas = 600000n;                 // rough; tune after a receipt
+  const price = (fee.gasPrice ?? fee.maxFeePerGas ?? 0n);
+  const fee = await ethers.provider.getFeeData(); // { gasPrice?, maxFeePerGas?, maxPriorityFeePerGas? }
+  // Gas + premium guard (ethers v6 way)
+  const fee1 = 500, fee2 = 500; // 0.05% pools
+  const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
+  // Amount
+  console.log("seed   :", (await seed.getAddress()).toLowerCase());
+  console.log("owner  :", (await exe.owner()).toLowerCase());
+  const exe  = await ethers.getContractAt("FlashloanExecutor", exeAddr, seed);
+  const seed = new ethers.Wallet(process.env.SEED_KEY, ethers.provider);
+  // Signer = SEED (owner)
+  const ROUTER  = norm("0xE592427A0AEce92De3Edee1F18E0157C05861564"); // Uniswap V3
+  const USDC    = norm("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831");
+  const WETH    = norm("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+  const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;
+  // Addresses (Arbitrum One)
+  const norm = (a) => ethers.getAddress(a.toLowerCase());
+(async () => {
 .exit
-(await IWETH.balanceOf(exeAddr)).toString();         // confirm > 0
-await IWETH.transfer(exeAddr, ethers.parseEther("0.00005"));
-await IWETH.deposit({ value: ethers.parseEther("0.001") });
+})();
+  console.log("Tx:", rcpt.transactionHash, "GasUsed:", rcpt.gasUsed.toString());
+  const rcpt = await tx.wait();
+  const tx = await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
+  }
+    return;
+    console.log("Static-call revert:", e.shortMessage || e.message);
+  } catch (e) {
+    console.log("Static OK → sending tx…");
+    await exe.runSimpleFlash.staticCall(WETH, amount, params);
+  try {
+  // Static-call first to catch revert reason without spending gas
+  console.log("minProfitWei:", minProfit.toString());
+  );
+    [ROUTER, USDC, fee1, fee2, minProfit, deadline]
+    ["address","address","uint24","uint24","uint256","uint256"],
+  const params = abi.encode(
+  const abi = ethers.AbiCoder.defaultAbiCoder();
+  // Encode params: (router, mid, fee1, fee2, minProfitWei, deadline)
+  const deadline = BigInt(Math.floor(Date.now()/1000) + 120);
+  const minProfit = gasWei + premiumPad + safety;
+  const safety   = 10_000_000_000_000n;                   // 0.00001 WETH
+  const premiumPad = (amount * 7n) / 10000n;              // ~7 bps cushion
+  const gasWei   = gasPrice * estGas;                     // convert to wei
+  const estGas   = 600000n;                               // rough; adjust after a receipt
+  const gasPrice = await ethers.provider.getGasPrice();   // wei
+  // Profit guard = premium cushion + gas estimate + tiny safety
+  const fee1 = 500, fee2 = 500; // 0.05% pools
+  const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
+  // Amount & guards
+  if (bal === 0n) { throw new Error("SEED has 0 ETH on Arbitrum; fund ~0.01 ETH first."); }
+  console.log("seedETH:", bal.toString());
+  const bal = await ethers.provider.getBalance(await seed.getAddress());
+  console.log("seed   :", (await seed.getAddress()).toLowerCase());
+  console.log("owner  :", (await exe.owner()).toLowerCase());
+  // Quick sanity
+  const exe  = await ethers.getContractAt("FlashloanExecutor", exeAddr, seed);
+  const seed = new ethers.Wallet(process.env.SEED_KEY, ethers.provider);
+  // Signer = SEED (owner)
+  const ROUTER  = norm("0xE592427A0AEce92De3Edee1F18E0157C05861564"); // Uniswap V3
+  const USDC    = norm("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831");
+  const WETH    = norm("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+  const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;
+  // Addresses (Arbitrum One)
+  const norm = (a) => ethers.getAddress
+(async () => {
+.exit
+await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
+// then run your flash as before, with SEED as the signer:
+(await exe.owner()).toLowerCase();    // should equal await seed.getAddress()
+// optional: confirm
+const const exe  = await ethers.getContractAt("FlashloanExecutor", exeAddr, seed);
+const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;
+// in Hardhat console (inside contracts/)
+.exit
+await exe.transferOwnership(new ethers.Wallet(process.env.SEED_KEY).address);
+const exe = await ethers.getContractAt("FlashloanExecutor", process.env.FLASH_EXECUTOR_ADDRESS, new ethers.Wallet(process.env.ROOT_KEY, ethers.provider));
+.exit
+await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
 );
-  root
-   "function balanceOf(address) view returns (uint256)"],
-   "function transfer(address,uint256) returns (bool)",
-  ["function deposit() payable",
-  WETH,
-const IWETH = new ethers.Contract(
-const WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
-// 3) Prefund executor with a little WETH to cover Aave premium
-if (await exeAsRoot.paused()) { await exeAsRoot.unpause(); }
-const exeAsRoot = exeAsOwner.connect(root);
-// 2) Unpause if needed
-(await exeAsOwner.owner()).toLowerCase();            // now 0x3d89...
-await exeAsOwner.transferOwnership(await root.getAddress());
-(await root.getAddress()).toLowerCase();             // should be 0x3d89...
-(await exeAsOwner.owner()).toLowerCase();            // should be 0xff6a...
-const exeAsOwner = await ethers.getContractAt("FlashloanExecutor", exeAddr, owner);
-const root    = new ethers.Wallet(process.env.ROOT_KEY,  ethers.provider);
-const owner   = new ethers.Wallet(process.env.SEED_KEY, ethers.provider);
-const exeAddr = "0xbC2A7891F0c9c7C6992f47CB55d06C27996e38B0";
-// 1) Transfer ownership from deployer (SEED_KEY / 0xFf6A...) to ROOT_KEY (0x3d89...)
-(await exe.paused())
-await exe.transferOwnership(await signer.getAddress
-(await signer.getAddress()).toLowerCase();
-(await exe.owner()).toLowerCase();
+  [ROUTER, USDC, fee1, fee2, minProfit, deadline]
+  ["address","address","uint24","uint24","uint256","uint256"],
+const params = abi.encode(
+const abi = ethers.AbiCoder.defaultAbiCoder();
+const deadline   = BigInt(Math.floor(Date.now()/1000) + 120);
+const minProfit  = premiumPad + gasBuf;
+const gasBuf     = 80_000_000_000_000n;               // 0.00008 WETH
+const premiumPad = (amount * 7n) / 10000n;            // ~7 bps cushion
+const fee1 = 500, fee2 = 500;
 const exe     = await ethers.getContractAt("FlashloanExecutor", exeAddr, signer);
 const signer  = new ethers.Wallet(process.env.ROOT_KEY, ethers.provider);
-const exeAddr = "0xbC2A7891F0c9c7C6992f47CB55d06C27996e38B0";
+const amount  = BigInt(process.env.FLASH_AMOUNT_WEI);
+const ROUTER  = norm("0xE592427A0AEce92De3Edee1F18E0157C05861564");
+const USDC    = norm("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831");
+const WETH    = norm("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;
+const norm = (a) => ethers.getAddress(a.toLowerCase());
+.exit
+await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
+// fire (reverts automatically if not profitable enough)
+);
+  [ROUTER, USDC, fee1, fee2, minProfit, deadline]
+  ["address","address","uint24","uint24","uint256","uint256"],
+const params = abi.encode(
+const abi = ethers.AbiCoder.defaultAbiCoder();
+// encode params: (router, mid, fee1, fee2, minProfitWei, deadline)
+const deadline   = BigInt(Math.floor(Date.now()/1000) + 120);
+const minProfit  = premiumPad + gasBuf;
+ater)
+const gasBuf     = 80_000_000_000_000n;                      // 0.00008 WETH (tune l
+const premiumPad = (amount * 7n) / 10000n;                   // ~7 bps cushion
+const fee1 = 500, fee2 = 500;                                // 0.05% pools
+// fee tiers + profit guard
+const exe     = await ethers.getContractAt("FlashloanExecutor", exeAddr, signer);
+const signer  = new ethers.Wallet(process.env.ROOT_KEY, ethers.provider);
+const amount  = BigInt(process.env.FLASH_AMOUNT_WEI);         // e.g. 10000000000000n
+// signer + contract
+const ROUTER  = norm("0xE592427A0AEce92De3Edee1F18E0157C05861564"); // UniV3
+const USDC    = norm("0xAf88d065E77c8Cc2239327C5EDb3A432268e5831");
+const WETH    = norm("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;
+// addresses (normalized)
+const norm = (a) => ethers.get
+// normalize helper
+.exit
+exit.
+await exe.runSimpleFlash(WETH, amount, params, { gasLimit: 2_000_000 });
+// run (reverts automatically if not profitable enough)
+);
+  [ROUTER, USDC, fee1, fee2, minProfit, deadline]
+  ["address","address","uint24","uint24","uint256","uint256"],
+const params = abi.encode(
+const abi = ethers.AbiCoder.defaultAbiCoder();
+const deadline   = Math.floor(Date.now()/1000) + 60;
+const minProfit  = premiumPad + gasBuf;
+const gasBuf     = 80_000_000_000_000n;              // 0.00008 WETH
+const premiumPad = (amount * 7n) / 10000n;           // ~7 bps cushion
+// encode params: (router, mid, fee1, fee2, minProfitWei, deadline)
+const exe    = await ethers.getContractAt("FlashloanExecutor", exeAddr, signer);
+const signer = new ethers.Wallet(process.env.ROOT_KEY, ethers.provider);
+const amount = BigInt(process.env.FLASH_AMOUNT_WEI); // e.g. 1e13
+const fee1 = 500, fee2 = 500;                        // 0.05% tiers
+const ROUTER  = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // UniV3
+const USDC    = "0xAf88d065E77c8Cc2239327C5EDb3A432268e5831";
+const WETH    = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
+const exeAddr = process.env.FLASH_EXECUTOR_ADDRESS;

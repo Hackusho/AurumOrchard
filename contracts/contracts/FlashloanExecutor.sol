@@ -212,46 +212,70 @@ contract FlashloanExecutor is
     }
 
     function executeOperation(
-        address asset,
-        uint256 amount,
-        uint256 premium,
-        address /* initiator */,
-        bytes calldata /* params */
-    ) external override returns (bool) {
-        require(msg.sender == pool, "only pool");
+    address asset,
+    uint256 amount,
+    uint256 premium,
+    address /* initiator */,
+    bytes calldata params
+) external override returns (bool) {
+    require(msg.sender == pool, "only pool");
 
-        // repay loan (approve pool to pull)
-        uint256 repay = amount + premium;
-        IERC20 token = IERC20(asset);
-        token.approve(pool, 0);
-        token.approve(pool, repay);
+    // Decode execution plan
+    (
+        address[] memory pathA,
+        address[] memory pathB,
+        uint256 minOutA,
+        uint256 minOutB,
+        uint256 minProfitWei
+    ) = _decodeParams(params);
 
-        // profit = whatever remains after repay
-        uint256 bal = token.balanceOf(address(this));
-        uint256 profitWei = bal > repay ? bal - repay : 0;
+    IERC20 token = IERC20(asset);
+    uint256 beforeBal = token.balanceOf(address(this));
 
-        if (profitWei > 0) {
-            token.transfer(rootTreasury, profitWei);
-        }
+    // 1) Do the round-trip (e.g., WETH->USDC on UniV3, then USDC->WETH on Sushi)
+    uint256 afterBal = executeArbitrageStrategy(
+        asset,
+        amount,
+        pathA,
+        pathB,
+        minOutA,
+        minOutB
+    );
 
-        emit FlashCompleted(asset, premium, profitWei);
-        return true;
+    // 2) Require the round-trip covered premium + desired profit
+    uint256 earned = afterBal > beforeBal ? afterBal - beforeBal : 0;
+    require(earned >= premium + minProfitWei, "not profitable");
+
+    // 3) Repay Aave
+    uint256 repay = amount + premium;
+    token.approve(pool, 0);
+    token.approve(pool, repay);
+
+    // 4) Send profit to treasury
+    uint256 profitWei = afterBal - repay;
+    if (profitWei > 0) {
+        token.transfer(rootTreasury, profitWei);
     }
 
-    function _decodeParams(
-        bytes memory params
-    )
+    emit FlashCompleted(asset, premium, profitWei);
+    return true;
+}
+
+
+    function _decodeParams(bytes memory params)
         internal
         pure
         returns (
             address[] memory pathA,
             address[] memory pathB,
             uint256 minOutA,
-            uint256 minOutB
+            uint256 minOutB,
+            uint256 minProfitWei
         )
     {
-        return abi.decode(params, (address[], address[], uint256, uint256));
+    return abi.decode(params, (address[], address[], uint256, uint256, uint256));
     }
+
 
     function executeArbitrageStrategy(
         address asset,
