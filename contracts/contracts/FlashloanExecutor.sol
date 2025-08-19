@@ -166,100 +166,101 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
         uint256 amount,
         uint256 premium,
         address /* initiator */,
-        bytes calldata /* params */
+        bytes calldata params
     ) external override returns (bool) {
         require(msg.sender == pool, "only pool");
 
-        // Execute arbitrage strategy and capture the profit
-        uint256 profit = executeArbitrageStrategy(asset, amount);
+        (
+            address[] memory pathA,
+            address[] memory pathB,
+            uint256 minOutA,
+            uint256 minOutB
+        ) = _decodeParams(params);
 
-        // Ensure the profit from arbitrage is enough to cover the flash loan premium
+        // Perform the arbitrage using the provided paths
+        uint256 amountOut = executeArbitrageStrategy(
+            asset,
+            amount,
+            pathA,
+            pathB,
+            minOutA,
+            minOutB
+        );
+
+        // Ensure the final amount meets the minimum expected output
+        require(amountOut >= minOutB, "amountOut < minOut");
+
+        uint256 profit = amountOut > amount ? amountOut - amount : 0;
         require(profit >= premium, "Insufficient profit to cover flash loan premium");
 
-        // We have enough profit, so we can proceed with the repayment logic
         uint256 repayAmount = amount + premium;
         uint256 currentBalance = IERC20(asset).balanceOf(address(this));
-
-        // The amount to transfer to the treasury is the entire balance minus the repayment amount
-        // This ensures the contract is swept clean of any remaining funds (including dust)
         uint256 amountToTreasury = currentBalance - repayAmount;
 
-        // Transfer the net profit (and any dust) to the root treasury
         if (amountToTreasury > 0) {
             IERC20(asset).transfer(rootTreasury, amountToTreasury);
         }
 
-        // Approve the Aave pool to pull the repayment amount
         IERC20(asset).approve(pool, 0);
         IERC20(asset).approve(pool, repayAmount);
 
-        // Emit an event with the details of the completed flash loan
         emit FlashCompleted(asset, premium, profit - premium);
         return true;
     }
 
-    // Execute the actual arbitrage strategy
-    function executeArbitrageStrategy(address asset, uint256 amount) internal returns (uint256 profit) {
-        if (asset != WETH) {
-            return 0; // Only support WETH for now
-        }
-        
-        // Strategy: WETH -> USDC -> WETH arbitrage between Uniswap V3 and SushiSwap
-        try this.executeWethArbitrage(amount) returns (uint256 arbProfit) {
-            return arbProfit;
-        } catch Error(string memory reason) {
-            // Log the specific error reason
-            emit ArbitrageExecuted(WETH, USDC, amount, 0, 0);
-            return 0;
-        } catch {
-            // If arbitrage fails for any other reason, return 0 profit
-            emit ArbitrageExecuted(WETH, USDC, amount, 0, 0);
-            return 0;
-        }
+    function _decodeParams(bytes memory params)
+        internal
+        pure
+        returns (
+            address[] memory pathA,
+            address[] memory pathB,
+            uint256 minOutA,
+            uint256 minOutB
+        )
+    {
+        return abi.decode(params, (address[], address[], uint256, uint256));
     }
 
-    // Execute WETH arbitrage strategy
-    function executeWethArbitrage(uint256 amount) external returns (uint256 profit) {
-        require(msg.sender == address(this), "Only self-call allowed");
-        
-        uint256 balanceBefore = IERC20(WETH).balanceOf(address(this));
-        
-        // Step 1: Swap WETH -> USDC on Uniswap V3
-        IERC20(WETH).approve(UNISWAP_V3_ROUTER, amount);
-        
-        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
-            tokenIn: WETH,
-            tokenOut: USDC,
+    function executeArbitrageStrategy(
+        address asset,
+        uint256 amount,
+        address[] memory pathA,
+        address[] memory pathB,
+        uint256 minOutA,
+        uint256 minOutB
+    ) internal returns (uint256 amountOut) {
+        require(pathA.length == 2, "pathA len");
+        require(pathB.length >= 2, "pathB len");
+        require(pathA[0] == asset && pathB[pathB.length - 1] == asset, "asset mismatch");
+        require(pathA[1] == pathB[0], "path mismatch");
+
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
+
+        IERC20(pathA[0]).approve(UNISWAP_V3_ROUTER, amount);
+        IUniswapV3Router.ExactInputSingleParams memory uniParams = IUniswapV3Router.ExactInputSingleParams({
+            tokenIn: pathA[0],
+            tokenOut: pathA[1],
             fee: UNISWAP_FEE,
             recipient: address(this),
             deadline: block.timestamp + 300,
             amountIn: amount,
-            amountOutMinimum: 0, // No slippage protection for arbitrage
+            amountOutMinimum: minOutA,
             sqrtPriceLimitX96: 0
         });
-        
-        uint256 usdcAmount = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInputSingle(params);
-        
-        // Step 2: Swap USDC -> WETH on SushiSwap
-        IERC20(USDC).approve(SUSHISWAP_ROUTER, usdcAmount);
-        
-        address[] memory path = new address[](2);
-        path[0] = USDC;
-        path[1] = WETH;
-        
+        uint256 interAmount = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInputSingle(uniParams);
+
+        IERC20(pathB[0]).approve(SUSHISWAP_ROUTER, interAmount);
         ISushiSwapRouter(SUSHISWAP_ROUTER).swapExactTokensForTokens(
-            usdcAmount,
-            0, // No slippage protection
-            path,
+            interAmount,
+            minOutB,
+            pathB,
             address(this),
             block.timestamp + 300
         );
-        
-        uint256 balanceAfter = IERC20(WETH).balanceOf(address(this));
-        profit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0;
-        
-        emit ArbitrageExecuted(WETH, USDC, amount, usdcAmount, profit);
-        return profit;
+
+        amountOut = IERC20(asset).balanceOf(address(this));
+        uint256 profit = amountOut > balanceBefore ? amountOut - balanceBefore : 0;
+        emit ArbitrageExecuted(pathA[0], pathB[pathB.length - 1], amount, amountOut, profit);
     }
 
     // Emergency function to withdraw stuck tokens
