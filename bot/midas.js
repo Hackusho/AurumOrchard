@@ -49,7 +49,7 @@ const signer = new ethers.Wallet(process.env.SEED_KEY, provider);
 // ---- config (declare BEFORE use) ----------------------------------------
 const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
 const pollMs = Number(process.env.POLL_MS || 4000);
-const estGas = BigInt(process.env.EST_GAS || 250000);
+const estGas = BigInt(process.env.EST_GAS || 230000);
 const safety = BigInt(process.env.SAFETY_WEI || "1000000000000");
 const FEES = [100, 500, 3000, 10000];
 
@@ -149,7 +149,7 @@ async function main() {
       }
   
       // 3) slippage guards per leg
-      const slippageBps = 30n; // 0.30% (tune)
+      const slippageBps = 10n; // 0.10% (tune)
       const minOutA = best.qa - (best.qa * slippageBps) / 10_000n;
       const minOutB = best.qb - (best.qb * slippageBps) / 10_000n;
   
