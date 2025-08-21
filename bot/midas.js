@@ -86,16 +86,8 @@ const TOK = {
   USDT: safeAddr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
 };
 
-// ---- DEX ids (must match the Solidity executor) -------------------------
-const DEX_UNIV3 = 1;
-const DEX_SUSHI_V2 = 2;
 
-// Helper: encode V2 path (address[]) as bytes for the executor
-const encV2 = (addrArray) =>
-  ethers.AbiCoder.defaultAbiCoder().encode(["address[]"], [addrArray]);
 
-// Heartbeat
-let hb = 0;
 
 // ---- DEX ids (must match the Solidity executor) -------------------------
 const DEX_UNIV3 = 1;
@@ -161,7 +153,7 @@ function getConfigNumber(name, fallback) {
 // --- tuning (env-overridable) ---------------------------------------------
 const SLIPPAGE_BPS = getConfigBigInt('slippageBps', "15");   // 0.15% per leg
 const MIN_EDGE_BPS = getConfigNumber('minEdgeBps', "2");    // require gross >= needBps + margin
-=======
+
 let ROUTE_MIDS = [];
 
 async function loadDefaultTokenList() {
