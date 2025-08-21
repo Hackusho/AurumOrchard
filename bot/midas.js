@@ -7,6 +7,7 @@ require('dotenv').config({
   quiet: true
 });
 const { ethers } = require('ethers');
+const fs = require('fs');
 const premiumBps = BigInt(process.env.FLASH_PREMIUM_BPS || "9"); // 9 = 0.09% (adjust if your Aave pool differs)
 
 // Dex IDs must match the Solidity constants
@@ -100,6 +101,52 @@ const parseCsvAddrs = (csv) =>
 const parseCsvInts = (csv) =>
   (csv || "").split(",").map(s => s.trim()).filter(Boolean).map(x => Number(x));
 
+
+// -------- CLI / config parsing --------------------------------------------
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--config' || a === '-c') {
+      out.config = argv[++i];
+    } else if (a.startsWith('--')) {
+      const key = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      out[key] = argv[++i];
+    }
+  }
+  return out;
+}
+
+const cli = parseArgs(process.argv.slice(2));
+let fileCfg = {};
+if (cli.config) {
+  try {
+    const txt = fs.readFileSync(cli.config, 'utf8');
+    fileCfg = JSON.parse(txt);
+  } catch (err) {
+    console.error('failed to read config file', err.message);
+    process.exit(1);
+  }
+}
+
+function getConfigBigInt(name, fallback) {
+  const raw = cli[name] ?? fileCfg[name] ?? process.env[name.toUpperCase()] ?? fallback;
+  const n = BigInt(raw);
+  if (n < 0n) throw new Error(`${name} must be non-negative`);
+  return n;
+}
+
+function getConfigNumber(name, fallback) {
+  const raw = cli[name] ?? fileCfg[name] ?? process.env[name.toUpperCase()] ?? fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a non-negative number`);
+  return n;
+}
+
+// --- tuning (env-overridable) ---------------------------------------------
+const SLIPPAGE_BPS = getConfigBigInt('slippageBps', "15");   // 0.15% per leg
+const MIN_EDGE_BPS = getConfigNumber('minEdgeBps', "2");    // require gross >= needBps + margin
+=======
 let ROUTE_MIDS = [];
 
 async function loadDefaultTokenList() {
@@ -144,16 +191,12 @@ async function loadRouteMids() {
   return Array.from(new Set(merged.map(a => a.toLowerCase()))).map(safeAddr);
 }
 
+
 const ENABLE_SUSHI = (process.env.ENABLE_SUSHI ?? "1") === "1";
 const LOG_ROUTES = (process.env.LOG_ROUTES ?? "0") === "1";
 
-
 const QUOTER = safeAddr("0x61fFE014bA17989E743c5F6cB21bF9697530B21e"); // Uniswap V3 QuoterV2
 const SUSHI = safeAddr("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"); // Sushi V2 router
-
-// --- tuning (env-overridable) ---------------------------------------------
-const SLIPPAGE_BPS = BigInt(process.env.SLIPPAGE_BPS || "15");   // 0.15% per leg
-const MIN_EDGE_BPS = Number(process.env.MIN_EDGE_BPS || "2");    // require gross >= needBps + margin
 
 const FEES = parseCsvInts(process.env.UNI_V3_FEES_CSV || "100,500,3000,10000");
 

@@ -128,10 +128,44 @@ The bot now merges any addresses supplied via `ROUTE_MIDS_CSV` with a cached lis
 python bot/main.py
 ```
 
+
+### Adjusting slippage and edge thresholds
+
+The `bot/midas.js` runner lets you tune slippage protection and minimum profit margins at runtime.
+
+Recommended ranges:
+
+| Option | Range (bps) | Default |
+| ------ | ----------- | ------- |
+| `slippageBps` | 5–50 | 15 |
+| `minEdgeBps` | 1–10 | 2 |
+
+Override the defaults with CLI flags:
+
+```bash
+node bot/midas.js --slippage-bps 25 --min-edge-bps 5
+```
+
+or supply a JSON config file:
+
+```json
+{
+  "slippageBps": 25,
+  "minEdgeBps": 5
+}
+```
+
+```bash
+node bot/midas.js --config midas.config.json
+```
+
+Values must be non‑negative; invalid inputs cause the script to exit.
+=======
 Polling defaults to once per second. Override with `POLL_MS` and enable adaptive
 adjustments by setting `ADAPTIVE_POLL=1`. When adaptive mode is on, the bot
 shortens the delay after profitable trades and gradually lengthens it after
 missed opportunities. `MIN_POLL_MS` and `MAX_POLL_MS` bound this range.
+
 
 ## Hardhat tasks & tests
 
