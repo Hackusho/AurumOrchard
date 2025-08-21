@@ -61,7 +61,25 @@ const signer = new ethers.Wallet(process.env.SEED_KEY, provider);
 
 // ---- config (declare BEFORE use) ----------------------------------------
 const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
-const pollMs = Number(process.env.POLL_MS || 4000);
+
+// polling interval
+const ADAPTIVE_POLL = (process.env.ADAPTIVE_POLL || '0') === '1';
+const MIN_POLL_MS = Number(process.env.MIN_POLL_MS || 500);
+const MAX_POLL_MS = Number(process.env.MAX_POLL_MS || 10_000);
+let pollMs = Number(process.env.POLL_MS || 1000);
+let missCount = 0;
+
+function tunePoll(success) {
+  if (!ADAPTIVE_POLL) return;
+  if (success) {
+    missCount = 0;
+    pollMs = Math.max(MIN_POLL_MS, Math.floor(pollMs / 2));
+  } else {
+    missCount += 1;
+    pollMs = Math.min(MAX_POLL_MS, pollMs + 500 * missCount);
+  }
+}
+
 const estGas = BigInt(process.env.EST_GAS || 210000);
 const safety = BigInt(process.env.SAFETY_WEI || "1000000000000");
 
@@ -324,7 +342,7 @@ async function main() {
       // pick the route with highest qb
       let best = uni;
       for (const cand of [v2, cross]) if (cand && (!best || cand.qb > best.qb)) best = cand;
-      if (!best) { console.log("skip: no route"); await sleep(pollMs); continue; }
+      if (!best) { console.log("skip: no route"); tunePoll(false); await sleep(pollMs); continue; }
   
       const grossBps = Number(((best.qb - amount) * 10_000n) / amount);
       const needBps  = Number(((need   - amount) * 10_000n) / amount);
@@ -332,6 +350,7 @@ async function main() {
       if (best.qb < need || grossBps < (needBps + MIN_EDGE_BPS)) {
         console.log("skip", { grossBps, needBps, need: need.toString(), hops: best.hops,
           dexA: best.dexA, dexB: best.dexB, mids: best.mids?.length || 0 });
+        tunePoll(false);
         await sleep(pollMs);
         continue;
       }
@@ -358,7 +377,7 @@ async function main() {
         await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
       } catch (e) {
         const msg = (e.reason || e.shortMessage || e.message || "").toLowerCase();
-        if (msg.includes("not profitable")) { console.log("sim: not profitable — skipping"); await sleep(pollMs); continue; }
+        if (msg.includes("not profitable")) { console.log("sim: not profitable — skipping"); tunePoll(false); await sleep(pollMs); continue; }
         throw e;
       }
   
@@ -366,15 +385,17 @@ async function main() {
       const rcpt = await tx.wait();
       console.log("done", { hash: rcpt.transactionHash, gasUsed: rcpt.gasUsed.toString(),
         dexA: best.dexA, dexB: best.dexB, hops: best.hops });
+      tunePoll(true);
   
     } catch (e) {
       console.error("err", e.shortMessage || e.message);
       if (e.stack) console.error(e.stack);
+      tunePoll(false);
     }
     await sleep(pollMs);
   }
-}
 
+}
 
 main().catch((e) => { console.error(e); process.exit(1); });
  
