@@ -2,15 +2,11 @@
   "name": "aurum_orchard",
   "version": "1.0.0",
   "description": "Aurum Orchard",
-  "main": "index.js",
   "private": true,
   "workspaces": [
-    "wallet_gen",
-    "arb_bot"
+    "contracts",
+    "frontend"
   ],
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
     "@noble/curves": "1.4.0",
     "@noble/hashes": "1.4.0",
