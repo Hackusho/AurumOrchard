@@ -122,6 +122,8 @@ pip install -r bot/requirements.txt
 
 Set environment variables such as `ARBITRUM_MAINNET_RPC_URL`, `SEED_KEY`, `ROOT_KEY`, `GOLDSTEM_ADDRESS`, `FLASH_EXECUTOR_ADDRESS`, `FLASH_ASSET`, and `FLASH_AMOUNT_WEI`, then execute:
 
+The bot now merges any addresses supplied via `ROUTE_MIDS_CSV` with a cached list of high-liquidity tokens stored in `bot/tokenlist.json`. If the cache is missing it is fetched from an external token list. Expanding this set of intermediate tokens improves route coverage and helps discover more arbitrage opportunities.
+
 ```bash
 python bot/main.py
 ```
