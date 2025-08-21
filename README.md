@@ -122,9 +122,12 @@ pip install -r bot/requirements.txt
 
 Set environment variables such as `ARBITRUM_MAINNET_RPC_URL`, `SEED_KEY`, `ROOT_KEY`, `GOLDSTEM_ADDRESS`, `FLASH_EXECUTOR_ADDRESS`, `FLASH_ASSET`, and `FLASH_AMOUNT_WEI`, then execute:
 
+The bot now merges any addresses supplied via `ROUTE_MIDS_CSV` with a cached list of high-liquidity tokens stored in `bot/tokenlist.json`. If the cache is missing it is fetched from an external token list. Expanding this set of intermediate tokens improves route coverage and helps discover more arbitrage opportunities.
+
 ```bash
 python bot/main.py
 ```
+
 
 ### Adjusting slippage and edge thresholds
 
@@ -157,6 +160,12 @@ node bot/midas.js --config midas.config.json
 ```
 
 Values must be non‑negative; invalid inputs cause the script to exit.
+=======
+Polling defaults to once per second. Override with `POLL_MS` and enable adaptive
+adjustments by setting `ADAPTIVE_POLL=1`. When adaptive mode is on, the bot
+shortens the delay after profitable trades and gradually lengthens it after
+missed opportunities. `MIN_POLL_MS` and `MAX_POLL_MS` bound this range.
+
 
 ## Hardhat tasks & tests
 

@@ -1,6 +1,8 @@
 // bot/midas.js
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config({
-  path: require('path').resolve(__dirname, '../contracts/.env'),
+  path: path.resolve(__dirname, '../contracts/.env'),
   override: true,
   quiet: true
 });
@@ -60,7 +62,25 @@ const signer = new ethers.Wallet(process.env.SEED_KEY, provider);
 
 // ---- config (declare BEFORE use) ----------------------------------------
 const amount = BigInt(process.env.FLASH_AMOUNT_WEI || "10000000000000"); // 0.00001 WETH
-const pollMs = Number(process.env.POLL_MS || 4000);
+
+// polling interval
+const ADAPTIVE_POLL = (process.env.ADAPTIVE_POLL || '0') === '1';
+const MIN_POLL_MS = Number(process.env.MIN_POLL_MS || 500);
+const MAX_POLL_MS = Number(process.env.MAX_POLL_MS || 10_000);
+let pollMs = Number(process.env.POLL_MS || 1000);
+let missCount = 0;
+
+function tunePoll(success) {
+  if (!ADAPTIVE_POLL) return;
+  if (success) {
+    missCount = 0;
+    pollMs = Math.max(MIN_POLL_MS, Math.floor(pollMs / 2));
+  } else {
+    missCount += 1;
+    pollMs = Math.min(MAX_POLL_MS, pollMs + 500 * missCount);
+  }
+}
+
 const estGas = BigInt(process.env.EST_GAS || 210000);
 const safety = BigInt(process.env.SAFETY_WEI || "1000000000000");
 
@@ -74,12 +94,13 @@ const TOK = {
 };
 
 
-// pull mids from env, fallback to deep stables
+// pull mids from env and merge with defaults
 const parseCsvAddrs = (csv) =>
   (csv || "").split(",").map(s => s.trim()).filter(Boolean).map(safeAddr);
 
 const parseCsvInts = (csv) =>
   (csv || "").split(",").map(s => s.trim()).filter(Boolean).map(x => Number(x));
+
 
 // -------- CLI / config parsing --------------------------------------------
 function parseArgs(argv) {
@@ -125,8 +146,52 @@ function getConfigNumber(name, fallback) {
 // --- tuning (env-overridable) ---------------------------------------------
 const SLIPPAGE_BPS = getConfigBigInt('slippageBps', "15");   // 0.15% per leg
 const MIN_EDGE_BPS = getConfigNumber('minEdgeBps', "2");    // require gross >= needBps + margin
+=======
+let ROUTE_MIDS = [];
 
-const ROUTE_MIDS = parseCsvAddrs(process.env.ROUTE_MIDS_CSV || "");
+async function loadDefaultTokenList() {
+  const cfgPath = path.resolve(__dirname, 'tokenlist.json');
+  if (fs.existsSync(cfgPath)) {
+    try {
+      const raw = fs.readFileSync(cfgPath, 'utf8');
+      const json = JSON.parse(raw);
+      if (Array.isArray(json.tokens)) return json.tokens.map(safeAddr);
+    } catch { }
+  }
+
+  try {
+    const res = await fetch('https://tokens.coingecko.com/arbitrum/all.json');
+    if (res.ok) {
+      const data = await res.json();
+      const tokens = data.tokens
+        .filter(t => t.chainId === 42161)
+        .slice(0, 20)
+        .map(t => safeAddr(t.address));
+      fs.writeFileSync(cfgPath, JSON.stringify({ tokens }, null, 2));
+      return tokens;
+    }
+  } catch (e) {
+    console.warn('token list fetch failed', e.message);
+  }
+
+  return [
+    TOK.USDC,
+    TOK.USDCe,
+    TOK.USDT,
+    safeAddr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'), // WBTC
+    safeAddr('0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1'), // DAI
+    safeAddr('0x912CE59144191C1204E64559FE8253a0e49E6548'), // ARB
+  ];
+}
+
+async function loadRouteMids() {
+  const defaults = await loadDefaultTokenList();
+  const envMids = parseCsvAddrs(process.env.ROUTE_MIDS_CSV || "");
+  const merged = [...defaults, ...envMids];
+  return Array.from(new Set(merged.map(a => a.toLowerCase()))).map(safeAddr);
+}
+
+
 const ENABLE_SUSHI = (process.env.ENABLE_SUSHI ?? "1") === "1";
 const LOG_ROUTES = (process.env.LOG_ROUTES ?? "0") === "1";
 
@@ -152,7 +217,7 @@ const sushi = new ethers.Contract(SUSHI, ISushi, provider); // view-only
 
 async function bestTwoLegV3(amountInWei) {
   let best = null;
-  for (const mid of ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT]) {
+  for (const mid of ROUTE_MIDS) {
     for (const f1 of FEES) {
       const pathAB = packV3Path([TOK.WETH, mid], [f1]);
       for (const f2 of FEES) {
@@ -163,7 +228,7 @@ async function bestTwoLegV3(amountInWei) {
           if (!best || qb > best.qb) best = { dexA: 'uni', dexB: 'uni', pathAB, pathBA, qa, qb, hops: '1-1', mids: [mid] };
         } catch { }
       }
-      for (const mid2 of ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT]) if (mid2 !== mid) {
+      for (const mid2 of ROUTE_MIDS) if (mid2 !== mid) {
         for (const g1 of FEES) {
           const pathAB2 = packV3Path([TOK.WETH, mid, mid2], [f1, g1]);
           for (const h1 of FEES) {
@@ -211,7 +276,7 @@ async function bestTwoLegV2(amountInWei) {
 }
 
 async function bestTwoLegCross(amountInWei) {
-  const mids = ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT];
+  const mids = ROUTE_MIDS;
   let best = null;
 
   for (const mid of mids) {
@@ -287,6 +352,7 @@ async function bestTwoLegCross(amountInWei) {
 }
 
 async function main() {
+  ROUTE_MIDS = await loadRouteMids();
   const exeAdr = safeAddr(process.env.FLASH_EXECUTOR_ADDRESS);
 
   const net = await provider.getNetwork();
@@ -319,7 +385,7 @@ async function main() {
       // pick the route with highest qb
       let best = uni;
       for (const cand of [v2, cross]) if (cand && (!best || cand.qb > best.qb)) best = cand;
-      if (!best) { console.log("skip: no route"); await sleep(pollMs); continue; }
+      if (!best) { console.log("skip: no route"); tunePoll(false); await sleep(pollMs); continue; }
   
       const grossBps = Number(((best.qb - amount) * 10_000n) / amount);
       const needBps  = Number(((need   - amount) * 10_000n) / amount);
@@ -327,6 +393,7 @@ async function main() {
       if (best.qb < need || grossBps < (needBps + MIN_EDGE_BPS)) {
         console.log("skip", { grossBps, needBps, need: need.toString(), hops: best.hops,
           dexA: best.dexA, dexB: best.dexB, mids: best.mids?.length || 0 });
+        tunePoll(false);
         await sleep(pollMs);
         continue;
       }
@@ -353,7 +420,7 @@ async function main() {
         await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
       } catch (e) {
         const msg = (e.reason || e.shortMessage || e.message || "").toLowerCase();
-        if (msg.includes("not profitable")) { console.log("sim: not profitable — skipping"); await sleep(pollMs); continue; }
+        if (msg.includes("not profitable")) { console.log("sim: not profitable — skipping"); tunePoll(false); await sleep(pollMs); continue; }
         throw e;
       }
   
@@ -361,13 +428,16 @@ async function main() {
       const rcpt = await tx.wait();
       console.log("done", { hash: rcpt.transactionHash, gasUsed: rcpt.gasUsed.toString(),
         dexA: best.dexA, dexB: best.dexB, hops: best.hops });
+      tunePoll(true);
   
     } catch (e) {
       console.error("err", e.shortMessage || e.message);
       if (e.stack) console.error(e.stack);
+      tunePoll(false);
     }
     await sleep(pollMs);
   }
+
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
