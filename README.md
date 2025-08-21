@@ -126,6 +126,11 @@ Set environment variables such as `ARBITRUM_MAINNET_RPC_URL`, `SEED_KEY`, `ROOT_
 python bot/main.py
 ```
 
+Polling defaults to once per second. Override with `POLL_MS` and enable adaptive
+adjustments by setting `ADAPTIVE_POLL=1`. When adaptive mode is on, the bot
+shortens the delay after profitable trades and gradually lengthens it after
+missed opportunities. `MIN_POLL_MS` and `MAX_POLL_MS` bound this range.
+
 ## Hardhat tasks & tests
 
 From the `contracts` directory:
