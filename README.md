@@ -126,6 +126,38 @@ Set environment variables such as `ARBITRUM_MAINNET_RPC_URL`, `SEED_KEY`, `ROOT_
 python bot/main.py
 ```
 
+### Adjusting slippage and edge thresholds
+
+The `bot/midas.js` runner lets you tune slippage protection and minimum profit margins at runtime.
+
+Recommended ranges:
+
+| Option | Range (bps) | Default |
+| ------ | ----------- | ------- |
+| `slippageBps` | 5–50 | 15 |
+| `minEdgeBps` | 1–10 | 2 |
+
+Override the defaults with CLI flags:
+
+```bash
+node bot/midas.js --slippage-bps 25 --min-edge-bps 5
+```
+
+or supply a JSON config file:
+
+```json
+{
+  "slippageBps": 25,
+  "minEdgeBps": 5
+}
+```
+
+```bash
+node bot/midas.js --config midas.config.json
+```
+
+Values must be non‑negative; invalid inputs cause the script to exit.
+
 ## Hardhat tasks & tests
 
 From the `contracts` directory:
