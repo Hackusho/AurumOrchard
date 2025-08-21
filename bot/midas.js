@@ -7,13 +7,6 @@ require('dotenv').config({
 const { ethers } = require('ethers');
 const premiumBps = BigInt(process.env.FLASH_PREMIUM_BPS || "9"); // 9 = 0.09% (adjust if your Aave pool differs)
 
-// Dex IDs must match the Solidity constants
-const DEX = { UNIV3: 1, SUSHI_V2: 2 };
-
-// Encode a V2 path (address[]) into bytes so the executor can abi.decode it
-const encV2 = (pathArr) =>
-  ethers.AbiCoder.defaultAbiCoder().encode(['address[]'], [pathArr]);
-
 
 // ---- utils --------------------------------------------------------------
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -72,6 +65,17 @@ const TOK = {
   USDT: safeAddr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
 };
 
+// ---- DEX ids (must match the Solidity executor) -------------------------
+const DEX_UNIV3 = 1;
+const DEX_SUSHI_V2 = 2;
+
+// Helper: encode V2 path (address[]) as bytes for the executor
+const encV2 = (addrArray) =>
+  ethers.AbiCoder.defaultAbiCoder().encode(["address[]"], [addrArray]);
+
+// Heartbeat
+let hb = 0;
+
 
 // pull mids from env, fallback to deep stables
 const parseCsvAddrs = (csv) =>
@@ -109,6 +113,82 @@ const ISushi = new ethers.Interface([
 
 const quoter = new ethers.Contract(QUOTER, IQuoter, provider); // view-only -> provider is fine
 const sushi = new ethers.Contract(SUSHI, ISushi, provider); // view-only
+
+async function findBestRoute(amountInWei) {
+  const mids = (ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT]);
+  let best = null;
+
+  // small helpers that QUOTE & package a "leg":
+  const quoteUni = async (pathBytes, amtIn) => {
+    const [out] = await quoter.quoteExactInput.staticCall(pathBytes, amtIn);
+    return out;
+  };
+  const quoteV2  = async (addrPath, amtIn) => {
+    const arr = await sushi.getAmountsOut(amtIn, addrPath);
+    return arr[arr.length - 1];
+  };
+
+  // try a candidate combo and keep best.qb
+  const tryCand = async (dexA, dataA, dexB, dataB, hops, midsUsed) => {
+    try {
+      const qa = (dexA === 'uni')
+        ? await quoteUni(dataA, amountInWei)
+        : await quoteV2(dataA, amountInWei);
+
+      const qb = (dexB === 'uni')
+        ? await quoteUni(dataB, qa)
+        : await quoteV2(dataB, qa);
+
+      const cand = {
+        dexA, dexB, qa, qb, hops, mids: midsUsed,
+        dataA: (dexA === 'uni') ? dataA : encV2(dataA),
+        dataB: (dexB === 'uni') ? dataB : encV2(dataB)
+      };
+      if (!best || qb > best.qb) best = cand;
+    } catch { /* ignore quote failures */ }
+  };
+
+  // 1-1 combos
+  for (const mid of mids) {
+    for (const f1 of FEES) {
+      // Uni 1-1 legs
+      const v3AB = packV3Path([TOK.WETH, mid], [f1]);
+      for (const f2 of FEES) {
+        const v3BA = packV3Path([mid, TOK.WETH], [f2]);
+
+        await tryCand('uni',''+v3AB ? v3AB : v3AB, 'uni', v3BA, '1-1', [mid]); // uni->uni
+        if (ENABLE_SUSHI) {
+          await tryCand('uni', v3AB,      'sushi', [mid, TOK.WETH], '1-1', [mid]); // uni->sushi
+          await tryCand('sushi', [TOK.WETH, mid], 'uni',  v3BA,      '1-1', [mid]); // sushi->uni
+        }
+      }
+      if (ENABLE_SUSHI) {
+        // sushi->sushi (1-1), no fees loop
+        await tryCand('sushi', [TOK.WETH, mid], 'sushi', [mid, TOK.WETH], '1-1', [mid]);
+      }
+    }
+  }
+
+  // 2-2 combos
+  for (const mid of mids) for (const mid2 of mids) if (mid2 !== mid) {
+    for (const f1 of FEES) for (const g1 of FEES) {
+      const v3AB2 = packV3Path([TOK.WETH, mid, mid2], [f1, g1]);
+      for (const h1 of FEES) {
+        const v3BA2 = packV3Path([mid2, mid, TOK.WETH], [h1, f1]);
+
+        await tryCand('uni', v3AB2, 'uni', v3BA2, '2-2', [mid, mid2]); // uni->uni
+        if (ENABLE_SUSHI) {
+          await tryCand('uni',   v3AB2, 'sushi', [mid2, mid, TOK.WETH], '2-2', [mid, mid2]); // uni->sushi
+          await tryCand('sushi', [TOK.WETH, mid, mid2], 'uni', v3BA2,   '2-2', [mid, mid2]); // sushi->uni
+          await tryCand('sushi', [TOK.WETH, mid, mid2], 'sushi', [mid2, mid, TOK.WETH], '2-2', [mid, mid2]); // sushi->sushi
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
 
 async function bestTwoLegV3(amountInWei) {
   let best = null;
@@ -262,65 +342,70 @@ async function main() {
 
   while (true) {
     try {
-      // --- fees & thresholds ---
-      const fee = await getFees(provider);
-      const gas = (fee.gasPrice ?? fee.maxFeePerGas ?? 0n);
+      // heartbeat every 10 iters
+      if ((++hb % 10) === 0) console.log(`tick ${new Date().toISOString()}`);
+  
+      // fees & thresholds FIRST (so we can compare any route later)
+      const f = await getFees(provider);
+      const gas = (f.gasPrice ?? f.maxFeePerGas ?? 0n);
       const minProfitWei = gas * estGas + safety;
-      const premiumWei = (amount * premiumBps) / 10_000n;
-      const need = amount + minProfitWei + premiumWei;
+      const premiumWei   = (amount * premiumBps) / 10_000n;
+      const need         = amount + minProfitWei + premiumWei;
+      const needBps      = Number(((need - amount) * 10_000n) / amount);
   
-      // --- route search: Uni, Sushi, Cross ---
-      const [uni, v2, cross] = await Promise.all([
-        bestTwoLegV3(amount),
-        ENABLE_SUSHI ? bestTwoLegV2(amount) : null,
-        ENABLE_SUSHI ? bestTwoLegCross(amount) : null,
-      ]);
-  
-      // pick the route with highest qb
-      let best = uni;
-      for (const cand of [v2, cross]) if (cand && (!best || cand.qb > best.qb)) best = cand;
+      // find best among Uni-only, Sushi-only and cross-DEX
+      const best = await findBestRoute(amount);
       if (!best) { console.log("skip: no route"); await sleep(pollMs); continue; }
   
       const grossBps = Number(((best.qb - amount) * 10_000n) / amount);
-      const needBps  = Number(((need   - amount) * 10_000n) / amount);
   
+      if (LOG_ROUTES) {
+        const midsPretty = best.mids.map(a => a.slice(0,6)+'…'+a.slice(-4)).join('→');
+        console.log(`route ${best.dexA}/${best.dexB} ${best.hops} ${midsPretty} grossBps=${grossBps} needBps=${needBps}`);
+      }
+  
+      // economic gate (include a little margin)
       if (best.qb < need || grossBps < (needBps + MIN_EDGE_BPS)) {
-        console.log("skip", { grossBps, needBps, need: need.toString(), hops: best.hops,
-          dexA: best.dexA, dexB: best.dexB, mids: best.mids?.length || 0 });
+        const gasBpsNum = Number((minProfitWei * 10_000n) / amount);
+        const premBpsNum= Number((premiumWei   * 10_000n) / amount);
+        console.log("skip", { grossBps, needBps, gasBps: gasBpsNum, premiumBps: premBpsNum, hops: best.hops });
         await sleep(pollMs);
         continue;
       }
   
-      // --- slippage guards ---
-      const minOutA = best.qa - (best.qa * SLIPPAGE_BPS) / 10_000n;
-      const minOutB = best.qb - (best.qb * SLIPPAGE_BPS) / 10_000n;
+      // slippage guards
+      const sl = SLIPPAGE_BPS; // per-leg
+      const minOutA = best.qa - (best.qa * sl) / 10_000n;
+      const minOutB = best.qb - (best.qb * sl) / 10_000n;
   
-      // --- build executor params (dex ids + bytes data) ---
-      let dexAId, dataA, dexBId, dataB;
-      if (best.dexA === 'uni') { dexAId = DEX.UNIV3;  dataA = best.pathAB; }
-      else                     { dexAId = DEX.SUSHI_V2; dataA = encV2(best.pathA); }
-  
-      if (best.dexB === 'uni') { dexBId = DEX.UNIV3;  dataB = best.pathBA; }
-      else                     { dexBId = DEX.SUSHI_V2; dataB = encV2(best.pathB); }
+      // encode for executor: (uint8 dexA, bytes dataA, uint8 dexB, bytes dataB, uint256 minOutA, uint256 minOutB, uint256 minProfitWei)
+      const dexAId = (best.dexA === 'uni') ? DEX_UNIV3 : DEX_SUSHI_V2;
+      const dexBId = (best.dexB === 'uni') ? DEX_UNIV3 : DEX_SUSHI_V2;
   
       const params = ethers.AbiCoder.defaultAbiCoder().encode(
-        ['uint8','bytes','uint8','bytes','uint256','uint256','uint256'],
-        [ dexAId, dataA, dexBId, dataB, minOutA, minOutB, minProfitWei ]
+        ["uint8","bytes","uint8","bytes","uint256","uint256","uint256"],
+        [dexAId, best.dataA, dexBId, best.dataB, minOutA, minOutB, minProfitWei]
       );
   
-      // --- simulate then send ---
+      // simulate on-chain guard
+      const exeAdr = safeAddr(process.env.FLASH_EXECUTOR_ADDRESS);
+      const exe = new ethers.Contract(exeAdr, artifact.abi, signer);
       try {
         await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
       } catch (e) {
         const msg = (e.reason || e.shortMessage || e.message || "").toLowerCase();
-        if (msg.includes("not profitable")) { console.log("sim: not profitable — skipping"); await sleep(pollMs); continue; }
+        if (msg.includes("not profitable")) {
+          console.log("sim: not profitable — skipping");
+          await sleep(pollMs);
+          continue;
+        }
         throw e;
       }
   
-      const tx = await exe.runSimpleFlash(TOK.WETH, amount, params, { gasLimit: 2_100_000 });
+      // send tx
+      const tx = await exe.runSimpleFlash(TOK.WETH, amount, params, { gasLimit: 2_000_000 });
       const rcpt = await tx.wait();
-      console.log("done", { hash: rcpt.transactionHash, gasUsed: rcpt.gasUsed.toString(),
-        dexA: best.dexA, dexB: best.dexB, hops: best.hops });
+      console.log("done", { hash: rcpt.transactionHash, gasUsed: rcpt.gasUsed.toString() });
   
     } catch (e) {
       console.error("err", e.shortMessage || e.message);
@@ -329,7 +414,6 @@ async function main() {
     await sleep(pollMs);
   }
   
-
+}
 
 main().catch((e) => { console.error(e); process.exit(1); });
- 
