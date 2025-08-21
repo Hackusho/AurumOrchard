@@ -6,6 +6,7 @@ contract Goldstem {
     address public fruitWallet;
     address public branchesWallet;
 
+    // Percentage split for fruit and branches wallets. Must total 100.
     uint256 public fruitShare = 20;
     uint256 public branchesShare = 80;
 
@@ -24,7 +25,7 @@ contract Goldstem {
 
         uint256 totalAmount = msg.value;
         uint256 fruitAmount = (totalAmount * fruitShare) / 100;
-        uint256 branchesAmount = totalAmount - fruitAmount;
+        uint256 branchesAmount = (totalAmount * branchesShare) / 100;
 
         (bool success1, ) = fruitWallet.call{value: fruitAmount}("");
         require(success1, "Failed to send funds to fruit wallet");
@@ -39,6 +40,13 @@ contract Goldstem {
         require(msg.sender == owner, "Only owner can set wallets");
         fruitWallet = _fruitWallet;
         branchesWallet = _branchesWallet;
+    }
+
+    function setShares(uint256 _fruitShare, uint256 _branchesShare) public {
+        require(msg.sender == owner, "Only owner can set shares");
+        require(_fruitShare + _branchesShare == 100, "Shares must add up to 100");
+        fruitShare = _fruitShare;
+        branchesShare = _branchesShare;
     }
 
     function withdraw() public {

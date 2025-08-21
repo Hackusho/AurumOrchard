@@ -34,11 +34,31 @@ describe("Goldstem", function () {
     const finalFruitBalance = await ethers.provider.getBalance(fruitWallet.address);
     const finalBranchesBalance = await ethers.provider.getBalance(branchesWallet.address);
 
-    const fruitAmount = (amountToSend * 20n) / 100n;
-    const branchesAmount = amountToSend - fruitAmount;
+    const fruitShare = await goldstem.fruitShare();
+    const branchesShare = await goldstem.branchesShare();
+    const fruitAmount = (amountToSend * fruitShare) / 100n;
+    const branchesAmount = (amountToSend * branchesShare) / 100n;
 
     expect(finalFruitBalance - initialFruitBalance).to.equal(fruitAmount);
     expect(finalBranchesBalance - initialBranchesBalance).to.equal(branchesAmount);
+  });
+
+  it("Should allow owner to set new shares", async function () {
+    await goldstem.connect(owner).setShares(30, 70);
+    expect(await goldstem.fruitShare()).to.equal(30);
+    expect(await goldstem.branchesShare()).to.equal(70);
+  });
+
+  it("Should not allow non-owner to set new shares", async function () {
+    await expect(goldstem.connect(addr1).setShares(30, 70)).to.be.revertedWith(
+      "Only owner can set shares"
+    );
+  });
+
+  it("Should revert when shares do not add up to 100", async function () {
+    await expect(goldstem.connect(owner).setShares(30, 80)).to.be.revertedWith(
+      "Shares must add up to 100"
+    );
   });
 
   it("Should allow owner to set new wallets", async function () {
