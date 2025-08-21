@@ -1,0 +1,10 @@
+# Environment variables
+.env
+
+# Node dependencies
+node_modules/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
