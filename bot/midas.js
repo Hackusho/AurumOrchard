@@ -1,6 +1,8 @@
 // bot/midas.js
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config({
-  path: require('path').resolve(__dirname, '../contracts/.env'),
+  path: path.resolve(__dirname, '../contracts/.env'),
   override: true,
   quiet: true
 });
@@ -91,15 +93,57 @@ const TOK = {
 };
 
 
-// pull mids from env, fallback to deep stables
+// pull mids from env and merge with defaults
 const parseCsvAddrs = (csv) =>
   (csv || "").split(",").map(s => s.trim()).filter(Boolean).map(safeAddr);
 
 const parseCsvInts = (csv) =>
   (csv || "").split(",").map(s => s.trim()).filter(Boolean).map(x => Number(x));
 
+let ROUTE_MIDS = [];
 
-const ROUTE_MIDS = parseCsvAddrs(process.env.ROUTE_MIDS_CSV || "");
+async function loadDefaultTokenList() {
+  const cfgPath = path.resolve(__dirname, 'tokenlist.json');
+  if (fs.existsSync(cfgPath)) {
+    try {
+      const raw = fs.readFileSync(cfgPath, 'utf8');
+      const json = JSON.parse(raw);
+      if (Array.isArray(json.tokens)) return json.tokens.map(safeAddr);
+    } catch { }
+  }
+
+  try {
+    const res = await fetch('https://tokens.coingecko.com/arbitrum/all.json');
+    if (res.ok) {
+      const data = await res.json();
+      const tokens = data.tokens
+        .filter(t => t.chainId === 42161)
+        .slice(0, 20)
+        .map(t => safeAddr(t.address));
+      fs.writeFileSync(cfgPath, JSON.stringify({ tokens }, null, 2));
+      return tokens;
+    }
+  } catch (e) {
+    console.warn('token list fetch failed', e.message);
+  }
+
+  return [
+    TOK.USDC,
+    TOK.USDCe,
+    TOK.USDT,
+    safeAddr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'), // WBTC
+    safeAddr('0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1'), // DAI
+    safeAddr('0x912CE59144191C1204E64559FE8253a0e49E6548'), // ARB
+  ];
+}
+
+async function loadRouteMids() {
+  const defaults = await loadDefaultTokenList();
+  const envMids = parseCsvAddrs(process.env.ROUTE_MIDS_CSV || "");
+  const merged = [...defaults, ...envMids];
+  return Array.from(new Set(merged.map(a => a.toLowerCase()))).map(safeAddr);
+}
+
 const ENABLE_SUSHI = (process.env.ENABLE_SUSHI ?? "1") === "1";
 const LOG_ROUTES = (process.env.LOG_ROUTES ?? "0") === "1";
 
@@ -130,7 +174,7 @@ const sushi = new ethers.Contract(SUSHI, ISushi, provider); // view-only
 
 async function bestTwoLegV3(amountInWei) {
   let best = null;
-  for (const mid of ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT]) {
+  for (const mid of ROUTE_MIDS) {
     for (const f1 of FEES) {
       const pathAB = packV3Path([TOK.WETH, mid], [f1]);
       for (const f2 of FEES) {
@@ -141,7 +185,7 @@ async function bestTwoLegV3(amountInWei) {
           if (!best || qb > best.qb) best = { dexA: 'uni', dexB: 'uni', pathAB, pathBA, qa, qb, hops: '1-1', mids: [mid] };
         } catch { }
       }
-      for (const mid2 of ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT]) if (mid2 !== mid) {
+      for (const mid2 of ROUTE_MIDS) if (mid2 !== mid) {
         for (const g1 of FEES) {
           const pathAB2 = packV3Path([TOK.WETH, mid, mid2], [f1, g1]);
           for (const h1 of FEES) {
@@ -189,7 +233,7 @@ async function bestTwoLegV2(amountInWei) {
 }
 
 async function bestTwoLegCross(amountInWei) {
-  const mids = ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT];
+  const mids = ROUTE_MIDS;
   let best = null;
 
   for (const mid of mids) {
@@ -265,6 +309,7 @@ async function bestTwoLegCross(amountInWei) {
 }
 
 async function main() {
+  ROUTE_MIDS = await loadRouteMids();
   const exeAdr = safeAddr(process.env.FLASH_EXECUTOR_ADDRESS);
 
   const net = await provider.getNetwork();
