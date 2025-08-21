@@ -4,12 +4,12 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+
 import {IPoolAddressesProvider} from "@aave/core-v3/contracts/interfaces/IPoolAddressesProvider.sol";
 import {IPool} from "@aave/core-v3/contracts/interfaces/IPool.sol";
 import {IFlashLoanSimpleReceiver} from "@aave/core-v3/contracts/flashloan/interfaces/IFlashLoanSimpleReceiver.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// DEX Router Interfaces for Arbitrum
 interface IUniswapV3Router {
     struct ExactInputParams {
         bytes path;
@@ -18,214 +18,157 @@ interface IUniswapV3Router {
         uint256 amountIn;
         uint256 amountOutMinimum;
     }
-    function exactInput(
-        ExactInputParams calldata params
-    ) external payable returns (uint256 amountOut);
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
 }
 
-contract FlashloanExecutor is
-    Ownable,
-    Pausable,
-    ReentrancyGuard,
-    IFlashLoanSimpleReceiver
-{
-    address public immutable pool;
+interface IUniswapV2RouterLike {
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+}
+
+contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimpleReceiver {
+    // ---- Aave ----
     address public immutable provider;
+    address public immutable pool;
+
+    // ---- Treasury / Ops ----
     address public rootTreasury;
     address public goldstem;
 
-    // DEX Router addresses on Arbitrum
-    address public constant UNISWAP_V3_ROUTER =
-        0xE592427A0AEce92De3Edee1F18E0157C05861564;
-    
-    // Common token pairs for arbitrage
-    address public constant WETH = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
-    address public constant USDC = 0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8;
-    address public constant USDT = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
+    // ---- Routers (Arbitrum) ----
+    address public constant UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address public constant SUSHI_V2_ROUTER   = 0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506;
 
-    // Arbitrage parameters
-    uint256 public constant MIN_PROFIT_THRESHOLD = 0.001 ether; // 0.001 WETH minimum profit
-    uint256 public constant MAX_FLASH_AMOUNT = 100 ether; // 100 WETH max flash loan
+    // ---- Tokens commonly used (not required, but handy to reference) ----
+    address public constant WETH  = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
 
-    event FlashStarted(address asset, uint256 amount);
-    event FlashCompleted(address asset, uint256 premium, uint256 profitWei);
-    event ArbitrageExecuted(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 profit
-    );
+    // ---- Dex IDs ----
+    uint8 private constant DEX_UNIV3 = 1;
+    uint8 private constant DEX_SUSHI_V2 = 2;
 
-    constructor(
-        address _provider,
-        address _goldstem,
-        address _rootTreasury
-    )
-        Ownable(msg.sender) // if OZ v5; remove if using OZ v4
+    // ---- Events ----
+    event FlashStarted(address indexed asset, uint256 amount);
+    event FlashCompleted(address indexed asset, uint256 premium, uint256 profitWei);
+    event LegExecuted(uint8 indexed dex, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
+
+    constructor(address _provider, address _goldstem, address _rootTreasury)
+        Ownable(msg.sender) // OZ v5 style; for OZ v4, remove arg and call _transferOwnership(msg.sender)
     {
-        require(
-            _provider != address(0) &&
-                _goldstem != address(0) &&
-                _rootTreasury != address(0),
-            "zero addr"
-        );
+        require(_provider != address(0) && _goldstem != address(0) && _rootTreasury != address(0), "zero addr");
         provider = _provider;
         pool = IPoolAddressesProvider(_provider).getPool();
         goldstem = _goldstem;
         rootTreasury = _rootTreasury;
     }
 
-    function setGoldstem(address a) external onlyOwner {
-        goldstem = a;
-    }
-    function setRootTreasury(address a) external onlyOwner {
-        rootTreasury = a;
+    // Admin
+    function setGoldstem(address a) external onlyOwner { goldstem = a; }
+    function setRootTreasury(address a) external onlyOwner { rootTreasury = a; }
+
+    // Aave interfaces required
+    function ADDRESSES_PROVIDER() external view returns (IPoolAddressesProvider) { return IPoolAddressesProvider(provider); }
+    function POOL() external view returns (IPool) { return IPool(pool); }
+
+    // ---- Bytes path helpers (UniV3) ----
+    function _firstTokenV3(bytes memory path) internal pure returns (address token) {
+        require(path.length >= 20, "v3 path short");
+        assembly { token := shr(96, mload(add(path, 32))) }
     }
 
-    // Required by IFlashLoanSimpleReceiver interface
-    function ADDRESSES_PROVIDER()
+    function _lastTokenV3(bytes memory path) internal pure returns (address token) {
+        require(path.length >= 20, "v3 path short");
+        uint256 len = path.length;
+        uint256 index = len - 20;
+        assembly { token := shr(96, mload(add(add(path, 32), index))) }
+    }
+
+    // ---- Encoded address[] helpers (V2) ----
+    function _firstTokenV2(bytes memory encodedPath) internal pure returns (address token) {
+        address[] memory p = abi.decode(encodedPath, (address[]));
+        require(p.length >= 2, "v2 path short");
+        token = p[0];
+    }
+
+    function _lastTokenV2(bytes memory encodedPath) internal pure returns (address token) {
+        address[] memory p = abi.decode(encodedPath, (address[]));
+        require(p.length >= 2, "v2 path short");
+        token = p[p.length - 1];
+    }
+
+    function _startTokenByDex(uint8 dex, bytes memory data) internal pure returns (address) {
+        if (dex == DEX_UNIV3) return _firstTokenV3(data);
+        if (dex == DEX_SUSHI_V2) return _firstTokenV2(data);
+        revert("bad dex A");
+    }
+
+    function _endTokenByDex(uint8 dex, bytes memory data) internal pure returns (address) {
+        if (dex == DEX_UNIV3) return _lastTokenV3(data);
+        if (dex == DEX_SUSHI_V2) return _lastTokenV2(data);
+        revert("bad dex B");
+    }
+
+    // ---- Flash entry ----
+    /// params encoding:
+    /// (uint8 dexA, bytes dataA, uint8 dexB, bytes dataB, uint256 minOutA, uint256 minOutB, uint256 minProfitWei)
+    function runSimpleFlash(address asset, uint256 amount, bytes calldata params)
         external
-        view
-        returns (IPoolAddressesProvider)
+        whenNotPaused
+        nonReentrant
+        onlyOwner
     {
-        return IPoolAddressesProvider(provider);
-    }
+        require(amount > 0, "amount=0"); // amount sizing is done off-chain
+        emit FlashStarted(asset, amount);
 
-    function POOL() external view returns (IPool) {
-        return IPool(pool);
-    }
-
-    // Calculate optimal flash loan amount based on current market conditions
-    function calculateOptimalFlashAmount(
-        address asset
-    ) public view returns (uint256 optimalAmount, uint256 expectedProfit) {
-        if (asset != WETH) {
-            return (0, 0); // Only support WETH for now
-        }
-
-        // Start with 1 WETH and calculate potential profit
-        uint256 baseAmount = 1 ether;
-        uint256 maxAmount = MAX_FLASH_AMOUNT;
-
-        uint256 bestAmount = baseAmount;
-        uint256 bestProfit = 0;
-
-        // Test different amounts to find optimal
-        for (
-            uint256 amount = baseAmount;
-            amount <= maxAmount;
-            amount += 10 ether
-        ) {
-            uint256 profit = estimateArbitrageProfit(asset, amount);
-            if (profit > bestProfit) {
-                bestProfit = profit;
-                bestAmount = amount;
-            }
-        }
-
-        // Only return if profit exceeds threshold
-        if (bestProfit > MIN_PROFIT_THRESHOLD) {
-            return (bestAmount, bestProfit);
-        }
-
-        return (0, 0);
-    }
-
-    // Estimate potential arbitrage profit for a given amount
-    function estimateArbitrageProfit(
-        address asset,
-        uint256 amount
-    ) public view returns (uint256) {
-        if (asset != WETH) return 0;
-
-        try this.simulateArbitrage(asset, amount) returns (uint256 profit) {
-            return profit;
-        } catch {
-            return 0;
-        }
-    }
-
-    // Simulate arbitrage without executing (for estimation)
-    function simulateArbitrage(
-        address asset,
-        uint256 amount
-    ) external pure returns (uint256) {
-        // This is a simplified simulation - in practice you'd query actual DEX prices
-        // For now, we'll use a conservative estimate based on typical arbitrage opportunities
-
-        if (asset != WETH) return 0;
-
-        // Simulate 0.1% to 0.5% arbitrage opportunity
-        uint256 baseProfit = (amount * 3) / 1000; // 0.3% base profit
-
-        // Use a deterministic but varied profit calculation
-        uint256 adjustedProfit = baseProfit + (amount % 1000) / 1000;
-
-        return adjustedProfit;
-    }
-
-    function runSimpleFlash(
-        address asset,
-        uint256 amount,
-        bytes calldata params
-    ) external whenNotPaused nonReentrant onlyOwner {
-        uint256 flashAmount = amount;
-
-        // If amount is 0, calculate optimal amount
-        if (flashAmount == 0) {
-            (uint256 optimalAmount, ) = calculateOptimalFlashAmount(asset);
-            require(
-                optimalAmount > 0,
-                "No profitable arbitrage opportunity found"
-            );
-            flashAmount = optimalAmount;
-        }
-
-        require(flashAmount > 0, "amount=0");
-
-        emit FlashStarted(asset, flashAmount);
         IPool(pool).flashLoanSimple(
             address(this),
             asset,
-            flashAmount,
+            amount,
             params,
             0
         );
     }
 
+    // ---- Aave callback ----
     function executeOperation(
         address asset,
         uint256 amount,
         uint256 premium,
-        address /* initiator */,
+        address /*initiator*/,
         bytes calldata params
     ) external override returns (bool) {
         require(msg.sender == pool, "only pool");
 
-        // bytes-based V3 paths + guards
-        (
-            bytes memory pathV3A,
-            bytes memory pathV3B,
-            uint256 minOutA,
-            uint256 minOutB,
-            uint256 minProfitWei
-        ) = _decodeParams(params);
+        (uint8 dexA, bytes memory dataA, uint8 dexB, bytes memory dataB, uint256 minOutA, uint256 minOutB, uint256 minProfitWei)
+            = abi.decode(params, (uint8, bytes, uint8, bytes, uint256, uint256, uint256));
 
-        uint256 beforeBal = IERC20(asset).balanceOf(address(this));
+        // Validate leg chaining
+        address a0 = _startTokenByDex(dexA, dataA);
+        address aN = _endTokenByDex(dexA, dataA);
+        address b0 = _startTokenByDex(dexB, dataB);
+        address bN = _endTokenByDex(dexB, dataB);
 
-        uint256 afterBal = executeArbitrageStrategy(
-            asset,
-            amount,
-            pathV3A,
-            pathV3B,
-            minOutA,
-            minOutB
-        );
+        require(a0 == asset, "legA start != asset");
+        require(bN == asset, "legB end != asset");
+        require(aN == b0, "legs not chained");
 
-        // avoid underflow
-        uint256 profit = afterBal > beforeBal ? (afterBal - beforeBal) : 0;
-        require(profit >= premium + minProfitWei, "not profitable");
+        uint256 balBefore = IERC20(asset).balanceOf(address(this));
+
+        // Leg A
+        uint256 interAmount = _swap(dexA, dataA, amount, minOutA);
+
+        // Leg B
+        _swap(dexB, dataB, interAmount, minOutB);
+
+        uint256 balAfter = IERC20(asset).balanceOf(address(this));
+        uint256 realized = balAfter > balBefore ? balAfter - balBefore : 0;
+
+        // Must cover Aave premium + our required profit buffer
+        require(realized >= premium + minProfitWei, "not profitable");
 
         // Repay Aave
         uint256 repay = amount + premium;
@@ -233,7 +176,7 @@ contract FlashloanExecutor is
         IERC20(asset).approve(pool, repay);
 
         // Send profit to treasury
-        uint256 profitWei = afterBal - repay;
+        uint256 profitWei = balAfter - repay;
         if (profitWei > 0) {
             IERC20(asset).transfer(rootTreasury, profitWei);
         }
@@ -242,107 +185,64 @@ contract FlashloanExecutor is
         return true;
     }
 
-    function _decodeParams(
-        bytes memory params
-    )
-        internal
-        pure
-        returns (
-            bytes memory pathV3A, // asset -> ... -> mid
-            bytes memory pathV3B, // mid   -> ... -> asset
-            uint256 minOutA,
-            uint256 minOutB,
-            uint256 minProfitWei
-        )
-    {
-        return abi.decode(params, (bytes, bytes, uint256, uint256, uint256));
-    }
+    // ---- Internal swap dispatcher ----
+    function _swap(uint8 dex, bytes memory data, uint256 amountIn, uint256 amountOutMin) internal returns (uint256 out) {
+        if (dex == DEX_UNIV3) {
+            address tokenIn = _firstTokenV3(data);
+            address tokenOut = _lastTokenV3(data);
 
-    function _firstToken(
-        bytes memory path
-    ) internal pure returns (address token) {
-        require(path.length >= 20, "path short");
-        assembly {
-            token := shr(96, mload(add(path, 32)))
+            IERC20(tokenIn).approve(UNISWAP_V3_ROUTER, 0);
+            IERC20(tokenIn).approve(UNISWAP_V3_ROUTER, amountIn);
+
+            out = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
+                IUniswapV3Router.ExactInputParams({
+                    path: data,
+                    recipient: address(this),
+                    deadline: block.timestamp + 300,
+                    amountIn: amountIn,
+                    amountOutMinimum: amountOutMin
+                })
+            );
+
+            emit LegExecuted(dex, tokenIn, tokenOut, amountIn, out);
+            return out;
         }
-    }
-    function _lastToken(
-        bytes memory path
-    ) internal pure returns (address token) {
-        require(path.length >= 20, "path short");
-        uint256 len = path.length;
-        uint256 index = len - 20;
-        assembly {
-            token := shr(96, mload(add(add(path, 32), index)))
+        if (dex == DEX_SUSHI_V2) {
+            address[] memory path = abi.decode(data, (address[]));
+            require(path.length >= 2 && path[0] != address(0) && path[path.length - 1] != address(0), "bad v2 path");
+
+            address tokenIn = path[0];
+            address tokenOut = path[path.length - 1];
+
+            IERC20(tokenIn).approve(SUSHI_V2_ROUTER, 0);
+            IERC20(tokenIn).approve(SUSHI_V2_ROUTER, amountIn);
+
+            uint[] memory amounts = IUniswapV2RouterLike(SUSHI_V2_ROUTER).swapExactTokensForTokens(
+                amountIn,
+                amountOutMin,
+                path,
+                address(this),
+                block.timestamp + 300
+            );
+            out = amounts[amounts.length - 1];
+
+            emit LegExecuted(dex, tokenIn, tokenOut, amountIn, out);
+            return out;
         }
+        revert("unknown dex");
     }
 
-    function executeArbitrageStrategy(
-        address asset,
-        uint256 amount,
-        bytes memory pathV3A,
-        bytes memory pathV3B,
-        uint256 minOutA,
-        uint256 minOutB
-    ) internal returns (uint256 amountOut) {
-        address a0 = _firstToken(pathV3A);
-        address aN = _lastToken(pathV3A);
-        address b0 = _firstToken(pathV3B);
-        address bN = _lastToken(pathV3B);
-
-        require(a0 == asset, "pathA start != asset");
-        require(bN == asset, "pathB end != asset");
-        require(aN == b0, "paths not chained");
-
-        uint256 balBefore = IERC20(asset).balanceOf(address(this));
-
-        // Leg A: asset -> mid (multi-hop, variable fees)
-        IERC20(a0).approve(UNISWAP_V3_ROUTER, 0);
-        IERC20(a0).approve(UNISWAP_V3_ROUTER, amount);
-
-        uint256 interAmount = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
-            IUniswapV3Router.ExactInputParams({
-                path: pathV3A,
-                recipient: address(this),
-                deadline: block.timestamp + 300,
-                amountIn: amount,
-                amountOutMinimum: minOutA
-            })
-        );
-
-        // Leg B: mid -> asset (multi-hop, variable fees)
-        IERC20(b0).approve(UNISWAP_V3_ROUTER, 0);
-        IERC20(b0).approve(UNISWAP_V3_ROUTER, interAmount);
-
-        IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
-            IUniswapV3Router.ExactInputParams({
-                path: pathV3B,
-                recipient: address(this),
-                deadline: block.timestamp + 300,
-                amountIn: interAmount,
-                amountOutMinimum: minOutB
-            })
-        );
-
-        amountOut = IERC20(asset).balanceOf(address(this));
-        uint256 profit = amountOut > balBefore ? amountOut - balBefore : 0;
-        emit ArbitrageExecuted(a0, bN, amount, amountOut, profit);
-    }
-
-    // Emergency function to withdraw stuck tokens
+    // ---- Emergencies ----
     function emergencyWithdraw(address token) external onlyOwner {
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        if (balance > 0) {
-            IERC20(token).transfer(owner(), balance);
-        }
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (bal > 0) IERC20(token).transfer(owner(), bal);
     }
 
-    // Emergency function to withdraw ETH
     function emergencyWithdrawETH() external onlyOwner {
-        uint256 balance = address(this).balance;
-        if (balance > 0) {
-            (bool success, ) = owner().call{value: balance}("");
-            require(success, "ETH withdrawal failed");
+        uint256 bal = address(this).balance;
+        if (bal > 0) {
+            (bool ok,) = owner().call{value: bal}("");
+            require(ok, "eth withdraw failed");
         }
     }
 }

@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "C:\\Users\\12524\\Primal Tree AI\\AurumOrchard\\contracts\\contracts\\FlashloanExecutor.sol": {
-      "lastModificationDate": 1755600388744,
-      "contentHash": "53b7ada85276bfa341034bfae7248614",
+      "lastModificationDate": 1755738964599,
+      "contentHash": "ed283bd53f99ebaf8e1e2233c85f9ee2",
       "sourceName": "contracts/FlashloanExecutor.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -44,6 +44,7 @@
       ],
       "artifacts": [
         "FlashloanExecutor",
+        "IUniswapV2RouterLike",
         "IUniswapV3Router"
       ]
     },
