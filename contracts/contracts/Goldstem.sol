@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-contract Goldstem {
-    address public owner;
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract Goldstem is Ownable {
     address public fruitWallet;
     address public branchesWallet;
 
@@ -12,8 +13,7 @@ contract Goldstem {
 
     event FundsSplit(address indexed from, uint256 amount, uint256 fruitAmount, uint256 branchesAmount);
 
-    constructor(address _fruitWallet, address _branchesWallet) {
-        owner = msg.sender;
+    constructor(address _fruitWallet, address _branchesWallet) Ownable(msg.sender) {
         fruitWallet = _fruitWallet;
         branchesWallet = _branchesWallet;
     }
@@ -36,22 +36,19 @@ contract Goldstem {
         emit FundsSplit(msg.sender, totalAmount, fruitAmount, branchesAmount);
     }
 
-    function setWallets(address _fruitWallet, address _branchesWallet) public {
-        require(msg.sender == owner, "Only owner can set wallets");
+    function setWallets(address _fruitWallet, address _branchesWallet) public onlyOwner {
         fruitWallet = _fruitWallet;
         branchesWallet = _branchesWallet;
     }
 
-    function setShares(uint256 _fruitShare, uint256 _branchesShare) public {
-        require(msg.sender == owner, "Only owner can set shares");
+    function setShares(uint256 _fruitShare, uint256 _branchesShare) public onlyOwner {
         require(_fruitShare + _branchesShare == 100, "Shares must add up to 100");
         fruitShare = _fruitShare;
         branchesShare = _branchesShare;
     }
 
-    function withdraw() public {
-        require(msg.sender == owner, "Only owner can withdraw");
-        (bool success, ) = owner.call{value: address(this).balance}("");
+    function withdraw() public onlyOwner {
+        (bool success, ) = owner().call{value: address(this).balance}("");
         require(success, "Failed to withdraw funds");
     }
 }
