@@ -41,8 +41,8 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
     address public goldstem;
 
     // ---- Routers (Arbitrum) ----
-    address public constant UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
-    address public constant SUSHI_V2_ROUTER   = 0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506;
+    address public uniswapV3Router;
+    address public sushiV2Router;
 
     // ---- Tokens commonly used (not required, but handy to reference) ----
     address public constant WETH  = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
@@ -64,11 +64,18 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
         pool = IPoolAddressesProvider(_provider).getPool();
         goldstem = _goldstem;
         rootTreasury = _rootTreasury;
+
+        uniswapV3Router = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+        sushiV2Router = 0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506;
     }
 
     // Admin
     function setGoldstem(address a) external onlyOwner { goldstem = a; }
     function setRootTreasury(address a) external onlyOwner { rootTreasury = a; }
+    function setRouters(address _uniswapV3Router, address _sushiV2Router) external onlyOwner {
+        uniswapV3Router = _uniswapV3Router;
+        sushiV2Router = _sushiV2Router;
+    }
 
     // Aave interfaces required
     function ADDRESSES_PROVIDER() external view returns (IPoolAddressesProvider) { return IPoolAddressesProvider(provider); }
@@ -172,7 +179,6 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
 
         // Repay Aave
         uint256 repay = amount + premium;
-        IERC20(asset).approve(pool, 0);
         IERC20(asset).approve(pool, repay);
 
         // Send profit to treasury
@@ -191,10 +197,9 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
             address tokenIn = _firstTokenV3(data);
             address tokenOut = _lastTokenV3(data);
 
-            IERC20(tokenIn).approve(UNISWAP_V3_ROUTER, 0);
-            IERC20(tokenIn).approve(UNISWAP_V3_ROUTER, amountIn);
+            IERC20(tokenIn).approve(uniswapV3Router, amountIn);
 
-            out = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInput(
+            out = IUniswapV3Router(uniswapV3Router).exactInput(
                 IUniswapV3Router.ExactInputParams({
                     path: data,
                     recipient: address(this),
@@ -214,10 +219,9 @@ contract FlashloanExecutor is Ownable, Pausable, ReentrancyGuard, IFlashLoanSimp
             address tokenIn = path[0];
             address tokenOut = path[path.length - 1];
 
-            IERC20(tokenIn).approve(SUSHI_V2_ROUTER, 0);
-            IERC20(tokenIn).approve(SUSHI_V2_ROUTER, amountIn);
+            IERC20(tokenIn).approve(sushiV2Router, amountIn);
 
-            uint[] memory amounts = IUniswapV2RouterLike(SUSHI_V2_ROUTER).swapExactTokensForTokens(
+            uint[] memory amounts = IUniswapV2RouterLike(sushiV2Router).swapExactTokensForTokens(
                 amountIn,
                 amountOutMin,
                 path,

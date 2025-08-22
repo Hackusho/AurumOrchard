@@ -151,41 +151,26 @@ async function loadRouteMids() {
 // -------------------- routing (quoters) --------------------
 async function findBestRoute(amountInWei) {
   const mids = ROUTE_MIDS.length ? ROUTE_MIDS : [TOK.USDC, TOK.USDCe, TOK.USDT];
-  let best = null;
+  let candidates = [];
 
-  const quoteUni = async (pathBytes, amtIn) => {
-    const [out] = await quoter.quoteExactInput.staticCall(pathBytes, amtIn);
-    return out;
-  };
-  const quoteV2 = async (addrPath, amtIn) => {
-    const arr = await sushi.getAmountsOut(amtIn, addrPath);
-    return arr[arr.length - 1];
-  };
-
-  async function tryCand(dexA, quoteA, sendA, dexB, quoteB, sendB, hops, midsUsed) {
-    try {
-      const qa = (dexA === 'uni') ? await quoteUni(quoteA, amountInWei) : await quoteV2(quoteA, amountInWei);
-      const qb = (dexB === 'uni') ? await quoteUni(quoteB, qa)         : await quoteV2(quoteB, qa);
-      const cand = { dexA, dexB, qa, qb, hops, mids: midsUsed, dataA: sendA, dataB: sendB };
-      if (!best || qb > best.qb) best = cand;
-    } catch {}
-  }
-
+  // 1. Generate all possible routes without quoting yet
   // 1-1 combos
   for (const mid of mids) {
-    // uni-uni & cross
     for (const f1 of FEES) {
-      const v3AB = packV3Path([TOK.WETH, mid], [f1]);
+      const v3AB = { type: 'uni', path: packV3Path([TOK.WETH, mid], [f1]), send: packV3Path([TOK.WETH, mid], [f1]) };
+      const sushiAB = { type: 'sushi', path: [TOK.WETH, mid], send: encV2([TOK.WETH, mid]) };
       for (const f2 of FEES) {
-        const v3BA = packV3Path([mid, TOK.WETH], [f2]);
-        await tryCand('uni', v3AB, v3AB, 'uni', v3BA, v3BA, '1-1', [mid]);
+        const v3BA = { type: 'uni', path: packV3Path([mid, TOK.WETH], [f2]), send: packV3Path([mid, TOK.WETH], [f2]) };
+        candidates.push({ legA: v3AB, legB: v3BA, hops: '1-1', mids: [mid] });
         if (ENABLE_SUSHI) {
-          await tryCand('uni', v3AB, v3AB, 'sushi', [mid, TOK.WETH], encV2([mid, TOK.WETH]), '1-1', [mid]);
-          await tryCand('sushi', [TOK.WETH, mid], encV2([TOK.WETH, mid]), 'uni', v3BA, v3BA, '1-1', [mid]);
+          const sushiBA = { type: 'sushi', path: [mid, TOK.WETH], send: encV2([mid, TOK.WETH]) };
+          candidates.push({ legA: v3AB, legB: sushiBA, hops: '1-1', mids: [mid] });
+          candidates.push({ legA: sushiAB, legB: v3BA, hops: '1-1', mids: [mid] });
         }
       }
       if (ENABLE_SUSHI) {
-        await tryCand('sushi', [TOK.WETH, mid], encV2([TOK.WETH, mid]), 'sushi', [mid, TOK.WETH], encV2([mid, TOK.WETH]), '1-1', [mid]);
+        const sushiBA = { type: 'sushi', path: [mid, TOK.WETH], send: encV2([mid, TOK.WETH]) };
+        candidates.push({ legA: sushiAB, legB: sushiBA, hops: '1-1', mids: [mid] });
       }
     }
   }
@@ -193,19 +178,56 @@ async function findBestRoute(amountInWei) {
   // 2-2 combos
   for (const mid of mids) for (const mid2 of mids) if (mid2 !== mid) {
     for (const f1 of FEES) for (const g1 of FEES) {
-      const v3AB2 = packV3Path([TOK.WETH, mid, mid2], [f1, g1]);
+      const v3AB2 = { type: 'uni', path: packV3Path([TOK.WETH, mid, mid2], [f1, g1]), send: packV3Path([TOK.WETH, mid, mid2], [f1, g1]) };
+      const sushiAB2 = { type: 'sushi', path: [TOK.WETH, mid, mid2], send: encV2([TOK.WETH, mid, mid2]) };
       for (const h1 of FEES) {
-        const v3BA2 = packV3Path([mid2, mid, TOK.WETH], [h1, f1]);
-        await tryCand('uni', v3AB2, v3AB2, 'uni', v3BA2, v3BA2, '2-2', [mid, mid2]);
+        const v3BA2 = { type: 'uni', path: packV3Path([mid2, mid, TOK.WETH], [h1, f1]), send: packV3Path([mid2, mid, TOK.WETH], [h1, f1]) };
+        candidates.push({ legA: v3AB2, legB: v3BA2, hops: '2-2', mids: [mid, mid2] });
         if (ENABLE_SUSHI) {
-          await tryCand('uni', v3AB2, v3AB2, 'sushi', [mid2, mid, TOK.WETH], encV2([mid2, mid, TOK.WETH]), '2-2', [mid, mid2]);
-          await tryCand('sushi', [TOK.WETH, mid, mid2], encV2([TOK.WETH, mid, mid2]), 'uni', v3BA2, v3BA2, '2-2', [mid, mid2]);
-          await tryCand('sushi', [TOK.WETH, mid, mid2], encV2([TOK.WETH, mid, mid2]), 'sushi', [mid2, mid, TOK.WETH], encV2([mid2, mid, TOK.WETH]), '2-2', [mid, mid2]);
+          const sushiBA2 = { type: 'sushi', path: [mid2, mid, TOK.WETH], send: encV2([mid2, mid, TOK.WETH]) };
+          candidates.push({ legA: v3AB2, legB: sushiBA2, hops: '2-2', mids: [mid, mid2] });
+          candidates.push({ legA: sushiAB2, legB: v3BA2, hops: '2-2', mids: [mid, mid2] });
+          candidates.push({ legA: sushiAB2, legB: sushiBA2, hops: '2-2', mids: [mid, mid2] });
         }
       }
     }
   }
-  return best;
+
+  // 2. Execute all quotes in parallel
+  const quoteUni = (path, amtIn) => quoter.quoteExactInput.staticCall(path, amtIn).then(([out]) => out);
+  const quoteV2 = (path, amtIn) => sushi.getAmountsOut(amtIn, path).then(arr => arr[arr.length - 1]);
+
+  const promises = candidates.map(async (cand) => {
+    try {
+      const quoteFnA = cand.legA.type === 'uni' ? quoteUni : quoteV2;
+      const qa = await quoteFnA(cand.legA.path, amountInWei);
+
+      const quoteFnB = cand.legB.type === 'uni' ? quoteUni : quoteV2;
+      const qb = await quoteFnB(cand.legB.path, qa);
+
+      return {
+        dexA: cand.legA.type,
+        dexB: cand.legB.type,
+        qa,
+        qb,
+        hops: cand.hops,
+        mids: cand.mids,
+        dataA: cand.legA.send,
+        dataB: cand.legB.send,
+      };
+    } catch (e) {
+      // Errors are expected if a pool doesn't exist. Log them for debugging if needed.
+      console.warn(`Quote failed for ${cand.legA.type}/${cand.legB.type} with mids ${cand.mids}: ${e.message}`);
+      return null;
+    }
+  });
+
+  const results = await Promise.all(promises);
+  const successfulQuotes = results.filter(r => r !== null);
+
+  // 3. Find the best result
+  if (successfulQuotes.length === 0) return null;
+  return successfulQuotes.reduce((best, current) => (!best || current.qb > best.qb) ? current : best, null);
 }
 
 // -------------------- main loop --------------------
@@ -279,14 +301,18 @@ async function main() {
       );
     
       // 6) simulate then send
-      await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params).catch(e => {
+      try {
+        await exe.runSimpleFlash.staticCall(TOK.WETH, amount, params);
+      } catch (e) {
         const msg = (e.reason || e.shortMessage || e.message || "").toLowerCase();
         if (msg.includes("not profitable")) {
           console.log("sim: not profitable — skipping");
-          throw new Error("__softskip__");
+          tunePoll(false);
+          await sleep(pollMs);
+          continue;
         }
-        throw e;
-      });
+        throw e; // re-throw other errors
+      }
     
       const tx = await exe.runSimpleFlash(TOK.WETH, amount, params, { gasLimit: 2_000_000 });
       const rcpt = await tx.wait();
@@ -294,10 +320,8 @@ async function main() {
       tunePoll(true);
     
     } catch (e) {
-      if (e.message !== "__softskip__") {
-        console.error("err", e.shortMessage || e.message);
-        if (e.stack) console.error(e.stack);
-      }
+      console.error("err", e.shortMessage || e.message);
+      if (e.stack) console.error(e.stack);
       tunePoll(false);
     }
     await sleep(pollMs);
